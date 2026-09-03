@@ -1,0 +1,94 @@
+name = "azrail-os"
+main = "src/index.ts"
+compatibility_date = "2026-08-08"
+# Вопрос про "experimental" ЗАКРЫТ, оставлено как факт, а не напоминание.
+# SDK-агентов в исходнике требует этот флаг для subAgent() текстом своей же
+# ошибки — но реальный CI (2026-08-23) получил от Cloudflare отказ:
+# "The compatibility flag experimental is experimental and cannot yet be
+# used in Workers deployed to Cloudflare" (код 10021). Флаг убран.
+# Самотест 11/11 после этого прошёл зелёным — subAgent() поднимает всех
+# восьмерых агентов и без флага. Требование в тексте ошибки SDK для
+# задеплоенных Workers оказалось неверным. Возвращать "experimental" сюда
+# не нужно — деплой с ним падает гарантированно, это не гипотеза.
+#
+# Регрессия здесь уже случалась: значение из старого ZIP-бэкапа однажды
+# затёрло этот файл обратно на "nodejs_compat", "experimental" при
+# восстановлении из архива. Если увидишь его снова после копирования из
+# бэкапа — не обсуждать заново, просто убрать.
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+# Проверено: `wrangler versions upload --dry-run` собрал конфиг и корректно
+# показал env.ASSETS среди биндингов — синтаксис живой, не на глаз.
+
+# Оркестратор — единственный DO с явным биндингом.
+# Code Agent и Deploy Agent живут как sub-agents (this.subAgent(...)) —
+# отдельные миграции/биндинги им не нужны (см. README).
+[[durable_objects.bindings]]
+name = "Orchestrator"
+class_name = "Orchestrator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Orchestrator"]
+
+[[d1_databases]]
+binding = "AZRAIL_D1"
+database_name = "azrail-db"
+database_id = "c76e7d92-648c-45bc-b0df-f26b00d0ff88"
+
+[[kv_namespaces]]
+binding = "AZRAIL_KV"
+id = "dab3b792264f4d9cbec5d637d4f8d71e"
+
+[[r2_buckets]]
+binding = "AZRAIL_R2"
+bucket_name = "azrail-artifacts"
+
+[ai]
+binding = "AI"
+
+[vars]
+# Слаги моделей вынесены в src/lib/model-registry.ts: там у каждой записи
+# указан источник данных, и маршрутизатор выбирает модель по возможностям,
+# а не по жёстко заданному имени. Держать их ещё и здесь означало бы два
+# источника правды — один из них уже устарел незамеченным.
+
+# ID шлюза AI Gateway. Нужен для СТОРОННИХ моделей (anthropic/*, openai/*):
+# без него доступны только собственные модели Cloudflare (@cf/*).
+# "default" создаёт шлюз при первом обращении. Заодно включает аналитику
+# Gateway — стоимость, задержки, ошибки, токены.
+AI_GATEWAY_ID = "default"
+
+CORS_ORIGIN = "*"
+
+# --- ПОДКЛЮЧИТЬ ПОЗЖЕ (ресурсы ещё не созданы — см. README → "Пробелы") ---
+# [[queues.producers]]
+# binding = "AZRAIL_QUEUE"
+# queue = "azrail-tasks"
+#
+# [[vectorize]]
+# binding = "AZRAIL_VECTORIZE"
+# index_name = "azrail-knowledge"
+
+# ─────────────────────────────────────────────────────────────────────
+# ПЕСОЧНИЦА НА КОНТЕЙНЕРАХ
+#
+# Раскомментировать, когда контейнер будет создан. Код адаптеров уже
+# написан (src/core/sandbox.ts, инструменты sandbox_exec и
+# sandbox_preview) и включится сам: доступность вычисляется по наличию
+# биндинга, а не зашита флагом.
+#
+# ВНИМАНИЕ: раскомментировать ДО создания контейнера нельзя — деплой
+# упадёт на несуществующем биндинге. Сначала контейнер, потом эти строки.
+#
+# Что даёт: прогон тестов за секунды вместо минут через GitHub Actions,
+# произвольные команды и предпросмотр поднятого сервера.
+#
+# [[containers]]
+# binding = "AZRAIL_SANDBOX"
+# image = "./Dockerfile"
+# max_instances = 2
+# ─────────────────────────────────────────────────────────────────────
