@@ -14,6 +14,7 @@
 // Делает ровно одно, зато то, чего Gateway не умеет: выбирает, КАКУЮ
 // модель звать под конкретную задачу, — и объясняет, почему именно её.
 
+import { extractUsage, type ModelUsage, type UsageLedger } from "./usage";
 import {
   MODEL_REGISTRY,
   findModel,
@@ -184,6 +185,9 @@ export interface ModelRunResult<T> {
   /** Сколько моделей пришлось перебрать до успеха */
   attempts: number;
   reasoning: string[];
+  /** Расход, если модель его сообщила. null — «не сообщено», и это НЕ
+   *  ноль: подставленный ноль занизит итог и не заметится никогда. */
+  usage: ModelUsage | null;
 }
 
 /**
@@ -228,6 +232,17 @@ export interface RunOptions<T> extends RouteRequirements {
    * это поле должно избегать.
    */
   preferredModel?: string;
+
+  /**
+   * Копилка расхода за миссию.
+   *
+   * Записывает сюда сам маршрутизатор, а не место вызова. Причина в том,
+   * что только здесь известно число ПЕРЕБРАННЫХ моделей: неудачные
+   * попытки — это состоявшиеся вызовы, которые ничего не дали, и снаружи
+   * их не видно. Учёт по месту вызова показал бы расход меньше, чем он
+   * был, — а именно на такие тихие занижения этот проект и напарывался.
+   */
+  ledger?: UsageLedger;
 }
 
 export async function runModel<T = unknown>(
@@ -271,7 +286,18 @@ export async function runModel<T = unknown>(
       }
     }
 
-    return { output, model: pinned.slug, attempts: 1, reasoning: [`Модель закреплена явно: ${pinned.slug}.`] };
+    // Закреплённая модель учитывается наравне с автовыбранной: иначе
+    // отчёт о расходе зависел бы от того, как модель была выбрана.
+    const pinnedUsage = extractUsage(output);
+    req.ledger?.record({ intent, model: pinned.slug, usage: pinnedUsage, attempts: 1 });
+
+    return {
+      output,
+      model: pinned.slug,
+      attempts: 1,
+      reasoning: [`Модель закреплена явно: ${pinned.slug}.`],
+      usage: pinnedUsage,
+    };
   }
 
   // Сначала бесплатный отбор в памяти, и только ПОТОМ проверка простоя —
@@ -424,7 +450,10 @@ export async function runModel<T = unknown>(
         earlierFailures: errors.length ? errors : undefined,
       });
 
-      return { output, model: model.slug, attempts: i + 1, reasoning: decision.reasoning };
+      const usage = extractUsage(output);
+      req.ledger?.record({ intent, model: model.slug, usage, attempts: i + 1 });
+
+      return { output, model: model.slug, attempts: i + 1, reasoning: decision.reasoning, usage };
     } catch (err) {
       const text = err instanceof Error ? err.message : String(err);
       errors.push(`${model.slug}: ${text}`);

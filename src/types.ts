@@ -7,6 +7,13 @@ export interface Env {
   AZRAIL_R2: R2Bucket;
   AI: Ai;
   Orchestrator: DurableObjectNamespace<Orchestrator>;
+  /**
+   * Статика из public/. Биндинг был объявлен в wrangler.toml, но в типах
+   * его не существовало, и код физически не мог к нему обратиться — ровно
+   * поэтому неизвестный путь годами отдавал голую строку вместо страницы.
+   * Необязателен: без него срабатывает прежнее поведение.
+   */
+  ASSETS?: Fetcher;
 
   // Слаги моделей ЗДЕСЬ БОЛЬШЕ НЕ ЖИВУТ. Их единственное место —
   // lib/model-registry.ts, где у каждого записан источник данных.
@@ -34,6 +41,8 @@ export interface Env {
   AZRAIL_TOKEN?: string;
   /** Лимит задач в час на вызывающего. По умолчанию 50. */
   AZRAIL_HOURLY_LIMIT?: string;
+  /** Сколько минут без обновления считать миссию зависшей. По умолчанию 20. */
+  AZRAIL_MISSION_STALE_MINUTES?: string;
 
   /**
    * ID шлюза AI Gateway. Без него недоступны СТОРОННИЕ модели
@@ -100,7 +109,8 @@ export interface AttachmentRef {
  *  lib/tool-registry.ts, и она обязана совпадать с адаптерами в
  *  core/execution-engine.ts — за этим следит тест. */
 export type ToolName =
-  | "read_file" | "write_file" | "edit_file" | "delete_file"
+  | "read_file" | "write_file" | "edit_file"
+  | "apply_patch" | "delete_file"
   | "list_files" | "search_files"
   | "run_tests"
   | "open_pr" | "git_diff"

@@ -9,6 +9,15 @@ import { GitAgent } from "./git-agent";
 import { AGENT_REGISTRY, capabilityForIntent, findByCapability, type Capability } from "../lib/agent-registry";
 import { ensureProject } from "../lib/project";
 import { addMessage, ensureConversation, listMessages } from "../lib/chat-store";
+import { ExecutionEngine } from "../core/execution-engine";
+import {
+  drainHints,
+  finishMission,
+  isCancelRequested,
+  markRunning,
+  statusForResult,
+} from "../lib/mission-state";
+import { UsageLedger } from "../lib/usage";
 
 const MIN_PAYLOAD_LENGTH = 8;
 
@@ -413,6 +422,170 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
    */
   async invokeCapability(capability: Capability, request: TaskRequest): Promise<TaskResult> {
     return this.runCapability(capability, request);
+  }
+
+  /**
+   * ЗАПУСК МИССИИ В ФОНЕ.
+   *
+   * Раньше весь цикл выполнялся внутри HTTP-запроса к /api/mission: роут
+   * делал `await engine.runMission(...)` на восемь-двадцать шагов, каждый
+   * со своим вызовом модели. Cloudflare обрывает клиентское соединение
+   * примерно на сотой секунде, и миссия в него попросту не помещалась —
+   * пользователь получал 524, результат терялся целиком, а строка в
+   * missions навсегда оставалась в "executing", потому что запись
+   * финального статуса стояла ПОСЛЕ недостижимого await.
+   *
+   * Теперь роут только ставит задачу и сразу отдаёт missionId. Работа идёт
+   * здесь, внутри Durable Object: у него нет клиентского соединения, рвать
+   * нечего, и цикл может идти сколько нужно.
+   *
+   * schedule(0, ...) — штатный планировщик SDK агентов, а не самодельный
+   * alarm(). Свой alarm() на подклассе Agent конфликтует с внутренним
+   * планировщиком SDK: тот держит на будильнике собственные задачи и
+   * heartbeat, и перехват метода тихо ломает и то и другое.
+   */
+  async startMission(params: {
+    missionId: string;
+    projectId: string;
+    goal: string;
+    maxIterations: number;
+    preferredModel?: string;
+    publicHostname?: string;
+  }): Promise<{ scheduled: true; missionId: string }> {
+    await this.schedule(0, "runMissionTask", params);
+    log("info", "mission.scheduled", { missionId: params.missionId, projectId: params.projectId });
+    return { scheduled: true, missionId: params.missionId };
+  }
+
+  /**
+   * СИНХРОННЫЙ прогон миссии — только для измерителя.
+   *
+   * Обычная миссия уходит в фон и отвечает сразу: клиенту нечего ждать.
+   * Измерителю наоборот — он обязан дождаться конца, иначе замер ПОСЛЕ
+   * снимется с недоделанной работы и число будет ложным.
+   *
+   * Отдельный метод, а не флаг у startMission: смешивать в одном пути
+   * «ответить немедленно» и «дождаться любой ценой» значит однажды
+   * перепутать их местами на живом маршруте.
+   */
+  async runBenchMission(params: {
+    missionId: string;
+    projectId: string;
+    goal: string;
+    maxIterations: number;
+  }): Promise<TaskResult> {
+    const stopHeartbeat = await this.keepAlive();
+    try {
+      await markRunning(this.env, params.missionId);
+      const engine = new ExecutionEngine(this.env);
+      const result = await engine.runMission(
+        { message: params.goal, projectId: params.projectId },
+        {
+          missionId: params.missionId,
+          projectId: params.projectId,
+          iteration: 0,
+          maxIterations: params.maxIterations,
+          // Копилка заводится ЗДЕСЬ, на запуске миссии, а не внутри цикла:
+          // заведённая внутри, она считала бы один шаг и не отвечала бы на
+          // вопрос «во что обошлась миссия» — то есть повторила бы судьбу
+          // recallContext, которая была написана и никем не вызывалась.
+          usage: new UsageLedger(),
+          onEvent: (payload) => {
+            this.broadcastMissionEvent(payload);
+          },
+          invokeCapability: (capability, request) => this.runCapability(capability, request),
+          shouldAbort: () => isCancelRequested(this.env, params.missionId),
+          takeHints: () => drainHints(this.env, params.missionId),
+        },
+      );
+      await finishMission(this.env, params.missionId, statusForResult(result), result);
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await finishMission(this.env, params.missionId, "failed", {
+        status: "failed",
+        agent: "orchestrator",
+        summary: "Миссия измерителя прервалась.",
+        error: message,
+      });
+      // Возвращаем, а не бросаем: раннер обязан записать исход задачи, а
+      // не потерять весь прогон из-за одной упавшей.
+      return { status: "failed", agent: "orchestrator", summary: "Миссия прервалась.", error: message };
+    } finally {
+      stopHeartbeat();
+    }
+  }
+
+  /**
+   * Обработчик запланированной миссии. Вызывается планировщиком SDK, а не
+   * напрямую.
+   *
+   * keepAlive() обязателен: Durable Object выселяется примерно через минуту
+   * простоя, а «простой» здесь — это ожидание ответа модели, когда объект
+   * не обрабатывает ни одного события. Без heartbeat длинная миссия имеет
+   * шанс быть выселенной на середине — ровно та же потеря работы, от
+   * которой уходили, только по другой причине.
+   */
+  async runMissionTask(params: {
+    missionId: string;
+    projectId: string;
+    goal: string;
+    maxIterations: number;
+    preferredModel?: string;
+    publicHostname?: string;
+  }): Promise<void> {
+    const { missionId, projectId, goal } = params;
+    const stopHeartbeat = await this.keepAlive();
+
+    try {
+      await markRunning(this.env, missionId);
+      const engine = new ExecutionEngine(this.env);
+      const result = await engine.runMission(
+        { message: goal, projectId, preferredModel: params.preferredModel },
+        {
+          missionId,
+          projectId,
+          iteration: 0,
+          maxIterations: params.maxIterations,
+          // Копилка заводится ЗДЕСЬ, на запуске миссии, а не внутри цикла:
+          // заведённая внутри, она считала бы один шаг и не отвечала бы на
+          // вопрос «во что обошлась миссия» — то есть повторила бы судьбу
+          // recallContext, которая была написана и никем не вызывалась.
+          usage: new UsageLedger(),
+          preferredModel: params.preferredModel,
+          // Рассылка идёт прямо отсюда: мы уже ВНУТРИ нужного объекта, и
+          // межобъектного вызова (с его "Cannot perform I/O on behalf of a
+          // different Durable Object") здесь больше не возникает в принципе.
+          onEvent: (payload) => {
+            this.broadcastMissionEvent(payload);
+          },
+          invokeCapability: (capability, request) => this.runCapability(capability, request),
+          publicHostname: params.publicHostname,
+          shouldAbort: () => isCancelRequested(this.env, missionId),
+        },
+      );
+
+      await finishMission(this.env, missionId, statusForResult(result), result);
+      this.broadcastMissionEvent({
+        event: result.error === "cancelled" ? "mission.cancelled" : `mission.${result.status}`,
+        reason: result.summary,
+      });
+    } catch (err) {
+      // Падение цикла НЕ должно оставлять миссию висящей. Раньше такого
+      // пути не было вовсе: исключение улетало в обработчик HTTP, а строку
+      // в базе никто не поправлял.
+      const message = err instanceof Error ? err.message : String(err);
+      log("error", "mission.crashed", { missionId, error: message });
+      await finishMission(this.env, missionId, "failed", {
+        status: "failed",
+        agent: "orchestrator",
+        summary: "Миссия прервалась из-за внутренней ошибки.",
+        error: message,
+      });
+      this.broadcastMissionEvent({ event: "mission.failed", reason: message });
+    } finally {
+      stopHeartbeat();
+    }
   }
 
   private async runCapability(capability: Capability, request: TaskRequest): Promise<TaskResult> {

@@ -1,5 +1,6 @@
 import type { Env } from "../types";
 import { runModel, extractText } from "../lib/model-router";
+import type { UsageLedger } from "../lib/usage";
 import { log } from "../lib/resilience";
 import { parseTestOutput, type TestResult } from "./sandbox";
 
@@ -28,7 +29,27 @@ import { parseTestOutput, type TestResult } from "./sandbox";
  */
 
 export interface CheckVerdict {
+  /**
+   * Пропускать ли работу дальше.
+   *
+   * НЕ синоним «проверено». Проверка — надстройка: если проверяющий
+   * недоступен, работа уже сделана, и терять её из-за недоступной
+   * надстройки нельзя. Поэтому при несостоявшейся проверке здесь true.
+   */
   passed: boolean;
+  /**
+   * СОСТОЯЛАСЬ ЛИ ПРОВЕРКА НА САМОМ ДЕЛЕ.
+   *
+   * Раньше этого поля не было, и три разных исхода сливались в один:
+   * «проверено, всё хорошо», «проверяющий не ответил» и «проверка упала»
+   * возвращали одинаковое passed: true. Различие жило только в тексте
+   * reason — то есть нигде, потому что ни одна ветка кода его не читала.
+   *
+   * Разделение здесь не меняет политику (не проходит — не блокируем), но
+   * возвращает факт: отчёт миссии, измеритель и память больше не могут
+   * выдать неподтверждённое за подтверждённое.
+   */
+  verified: boolean;
   reason: string;
 }
 
@@ -68,7 +89,7 @@ export function renderEvidence(history: { tool: string; ok: boolean; result: str
  */
 export function parseVerdict(raw: string): CheckVerdict {
   const text = (raw ?? "").trim();
-  if (!text) return { passed: true, reason: "Проверяющий не ответил — пропускаем." };
+  if (!text) return { passed: true, verified: false, reason: "Проверяющий не ответил — результат НЕ подтверждён." };
 
   const unfenced = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
   const start = unfenced.indexOf("{");
@@ -77,8 +98,10 @@ export function parseVerdict(raw: string): CheckVerdict {
     try {
       const parsed = JSON.parse(unfenced.slice(start, end + 1)) as { passed?: unknown; reason?: unknown };
       if (typeof parsed.passed === "boolean") {
+        // Внятный ответ — единственный случай, когда проверка состоялась.
         return {
           passed: parsed.passed,
+          verified: true,
           reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 800) : "",
         };
       }
@@ -90,9 +113,13 @@ export function parseVerdict(raw: string): CheckVerdict {
   // Запасной разбор по ключевым словам. Отказ распознаём ЯВНО, всё
   // остальное считаем прохождением — по причине из комментария выше.
   if (/^\s*(нет|не готово|not done|fail|отклон)/i.test(unfenced)) {
-    return { passed: false, reason: unfenced.slice(0, 800) };
+    // Явный отказ словами — тоже состоявшаяся проверка.
+    return { passed: false, verified: true, reason: unfenced.slice(0, 800) };
   }
-  return { passed: true, reason: unfenced.slice(0, 300) };
+  /* Ответ не разобран ни как JSON, ни как отказ. Пропускаем, но НЕ
+   * объявляем проверенным: именно здесь раньше «проверяющий сказал
+   * что-то невнятное» превращалось в «проверено и всё хорошо». */
+  return { passed: true, verified: false, reason: `Ответ проверяющего не разобран: ${unfenced.slice(0, 300)}` };
 }
 
 /**
@@ -130,6 +157,12 @@ export async function checkResult(
   goal: string,
   history: { tool: string; ok: boolean; result: string }[],
   preferredModel?: string,
+  /** Что фактически изменилось в файлах. Необязательно — без него
+   *  проверка работает как раньше, просто вслепую. */
+  changes?: string,
+  /** Копилка расхода миссии. Проверка — такой же вызов модели, как и
+   *  остальные, и не попав в учёт, она делала бы отчёт неполным. */
+  ledger?: UsageLedger,
 ): Promise<CheckVerdict> {
   /* ── Тесты важнее мнений ──────────────────────────────────────────
    *
@@ -144,15 +177,41 @@ export async function checkResult(
   const tests = findTestEvidence(history);
   if (tests && tests.total > 0) {
     if (tests.ok) {
+      // Прогон тестов — проверка более надёжная, чем мнение модели:
+      // числа не убеждаются и не ошибаются в свою пользу.
       return {
         passed: true,
+        verified: true,
         reason: `Тесты пройдены: ${tests.passed} из ${tests.total} (${tests.runner}).`,
       };
     }
     const names = tests.failures.length ? ` Упали: ${tests.failures.slice(0, 5).join("; ")}.` : "";
     return {
       passed: false,
+      verified: true,
       reason: `Тесты не пройдены: ${tests.failed} из ${tests.total} упали (${tests.runner}).${names}`,
+    };
+  }
+
+  /* ── Ни одного изменения в файлах ─────────────────────────────────
+   *
+   * Отдельная проверка ДО обращения к модели, и она важнее, чем кажется.
+   * Задача про изменение кода, закрытая без единой правки файла, не
+   * выполнена — независимо от того, насколько убедительно выглядит
+   * пересказ. Спрашивать модель про такой случай бессмысленно: она
+   * читает тот же пересказ и охотно соглашается, что работа сделана.
+   *
+   * Исключение — задачи, где менять файлы и не требовалось: разобрать,
+   * объяснить, найти. Их отличает то, что в истории нет ни одной
+   * попытки записи. */
+  const triedToWrite = history.some(
+    (h) => h.tool === "write_file" || h.tool === "edit_file" || h.tool === "apply_patch",
+  );
+  if (changes === "ФАЙЛЫ НЕ ИЗМЕНИЛИСЬ НИ ОДИН." && triedToWrite) {
+    return {
+      passed: false,
+      verified: true,
+      reason: "Ни один файл не изменился, хотя запись выполнялась. Работа не доведена до файлов.",
     };
   }
 
@@ -161,7 +220,7 @@ export async function checkResult(
   try {
     const routed = await runModel<{ response?: string }>(
       env,
-      "chat",
+      "verify",
       {
         messages: [
           {
@@ -170,6 +229,7 @@ export async function checkResult(
               `Ты проверяешь чужую работу. Рассуждений исполнителя ты не видишь — только задачу и факты.\n\n` +
               `ЗАДАЧА, которую требовалось решить:\n${goal}\n\n` +
               `ЧТО ФАКТИЧЕСКИ СДЕЛАНО:\n${evidence}\n\n` +
+              (changes ? `ИЗМЕНЕНИЯ В ФАЙЛАХ (факт, не пересказ):\n${changes}\n\n` : "") +
               `Вопрос: задача действительно решена?\n` +
               `Отвечай строго JSON: {"passed": true|false, "reason": "коротко, что именно не сделано"}\n` +
               `passed=false ставь, только если видно КОНКРЕТНОЕ невыполненное требование задачи. ` +
@@ -177,7 +237,7 @@ export async function checkResult(
           },
         ],
       },
-      { preferredModel },
+      { preferredModel, ledger },
     );
 
     return parseVerdict(extractText(routed.output));
@@ -185,7 +245,7 @@ export async function checkResult(
     // Проверка не состоялась — пропускаем, но говорим об этом честно,
     // чтобы «проверено» не путалось с «проверить не удалось».
     log("warn", "check.failed", { error: err instanceof Error ? err.message : String(err) });
-    return { passed: true, reason: "Проверка недоступна — результат не подтверждён." };
+    return { passed: true, verified: false, reason: "Проверка недоступна — результат НЕ подтверждён." };
   }
 }
 

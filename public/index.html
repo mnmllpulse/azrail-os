@@ -190,7 +190,14 @@ button { cursor: pointer; }
 .panel-body { padding: var(--s5); }
 
 /* ── Ввод ──────────────────────────────────────────────────────────── */
-.ask { display: flex; align-items: flex-end; gap: var(--s2); }
+/* ПОЛЕ ВВОДА — ОТДЕЛЬНОЙ СТРОКОЙ СВЕРХУ.
+   Раньше оно делило строку с тремя кнопками и на телефоне сжималось до
+   узкой щели: главное действие выглядело как второстепенное. Теперь ввод
+   занимает всю ширину, кнопки уходят под него. Одно очевидное поле —
+   остальное ниже и мельче. */
+.ask { display: grid; grid-template-columns: 1fr; gap: var(--s2); }
+.ask-tools { display: flex; gap: var(--s2); align-items: center; }
+.ask-tools .go { margin-left: auto; }
 .ask textarea {
   flex: 1; min-height: 52px; max-height: 40vh; resize: none;
   background: rgba(255,255,255,.025); border: 1px solid var(--line);
@@ -326,6 +333,21 @@ button { cursor: pointer; }
   color: var(--muted); border-radius: var(--r-sm); padding: 8px 14px; font-size: 12px;
 }
 .cancel:hover { color: #fff; border-color: var(--line-str); }
+
+/* Строка подсказки. Показывается только у миссии — у одиночной задачи её
+   некому прочитать, и предлагать её значило бы обещать несуществующее. */
+.hintbar { display: flex; gap: var(--s3); margin-top: var(--s4); }
+.hintbar input {
+  flex: 1; min-width: 0; background: transparent; border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 9px 12px; color: inherit; font: inherit; outline: none;
+}
+.hintbar input:focus { border-color: var(--line-str); }
+.hintbar button {
+  border: 1px solid var(--line); background: transparent; color: var(--muted);
+  border-radius: var(--r-sm); padding: 9px 14px; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.hintbar button:hover:not(:disabled) { color: #fff; border-color: var(--line-str); }
+.hintbar button:disabled { opacity: .5; cursor: default; }
 
 /* Карта миссии — цепочка шагов, а не лог */
 .trace { list-style: none; margin: var(--s5) 0 0; padding: 0 0 0 var(--s5); position: relative; }
@@ -571,7 +593,22 @@ button { cursor: pointer; }
 
 /* Закрытое меню. На телефоне оно выезжает поверх, а не раздвигает
    содержимое: сдвиг всей страницы на узком экране читается как скачок. */
-.layout.nav-closed .sidebar { display: none; }
+/* МЕНЮ ВЫЕЗЖАЕТ, А НЕ ПРОПАДАЕТ.
+   Было `display: none` — его нельзя анимировать в принципе: полоса
+   мгновенно исчезала и мгновенно возникала. Движение здесь несёт смысл:
+   показывает, ОТКУДА пришло меню и куда уйдёт.
+   Уводится сдвигом и возвращается им же; `visibility` убирает его из
+   очереди фокуса, чтобы клавиатурой нельзя было провалиться в скрытое. */
+  .sidebar {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform .22s var(--ease), visibility 0s linear 0s;
+  }
+  .layout.nav-closed .sidebar {
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform .22s var(--ease), visibility 0s linear .22s;
+  }
 
 @media (max-width: 860px) {
   /* Выезжающее меню НЕ экономит ширину — оно лежит поверх. Значит и
@@ -715,18 +752,26 @@ textarea::placeholder { color: #676e79; }
 
 footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-family: var(--mono); }
 
-@media (max-width: 1050px) {
+/* Узкая полоса-рейка — только для планшетной ширины. Ниже 861 меню уже не
+   рейка, а выезжающая панель, и ужимать в ней нечего: раньше эти правила
+   протекали вниз и сплющивали отступы открытого меню на телефоне. */
+@media (max-width: 1050px) and (min-width: 861px) {
   .layout { grid-template-columns: 68px minmax(0,1fr); }
   .sidebar { padding: var(--s4) var(--s2); }
   .nav-item { justify-content: center; padding: 11px 0; }
   .nav-item span, .nav-item .sub, .nav-label { display: none; }
+}
+@media (max-width: 1050px) {
   .main { padding: var(--s5) var(--s5) 70px; }
 }
 @media (max-width: 650px) {
   .az-top { padding: 0 var(--s4); }
   .brand-meta, .top-chip span { display: none; }
   .layout { grid-template-columns: 1fr; }
-  .sidebar { display: none; }
+  /* .sidebar здесь НЕЛЬЗЯ гасить через display:none — именно это и ломало
+     кнопку меню на телефоне: ниже 650 точек панель исчезала совсем, и
+     нажатие на три полосы ничего не открывало. Панель на узком экране
+     лежит поверх (см. блок 860px) и убирается сдвигом, а не удалением. */
   .main { padding: var(--s5) var(--s4) 64px; }
   .panel-body { padding: var(--s4); }
 
@@ -804,12 +849,16 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       <section class="stage" id="askStage">
         <div class="ask">
           <textarea id="ask" rows="1" placeholder="Что построим сегодня?" spellcheck="false"></textarea>
-          <button class="mic" id="attachBtn" type="button" aria-label="Прикрепить файл" title="Прикрепить файл">📎</button>
+          <!-- Кнопки ПОД полем, а не рядом: рядом они отнимали у ввода
+               половину ширины на телефоне. -->
+          <div class="ask-tools">
+            <button class="mic" id="attachBtn" type="button" aria-label="Прикрепить файл" title="Прикрепить файл">📎</button>
           <button class="mic" id="polishBtn" type="button" aria-label="Довести формулировку" title="Довести формулировку">✨</button>
           <button class="mic" id="micBtn" type="button" aria-label="Голосовой ввод" title="Голосовой ввод">🎙</button>
           <button class="go" id="go" aria-label="Отправить">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
           </button>
+          </div>
         </div>
         <input type="file" id="fileInput" class="hidden" multiple>
         <div class="attached hidden" id="attached"></div>
@@ -833,6 +882,14 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
             <span id="workMeta">0 с</span>
           </div>
           <button class="cancel" id="cancelBtn">Отменить</button>
+        </div>
+        <!-- Поправить агента на ходу, не убивая работу. До этого
+             единственным жестом была отмена: видишь, что он пошёл не
+             туда, — и теряешь весь наработанный контекст. -->
+        <div class="hintbar hidden" id="hintBar">
+          <input id="hintInput" type="text" maxlength="600" autocomplete="off"
+                 placeholder="Подсказать на ходу…" />
+          <button id="hintBtn">Сказать</button>
         </div>
         <div class="mprog hidden" id="mprog">
           <div class="mprog-top">
@@ -1006,6 +1063,13 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     </div>
 
     <div class="row">
+      <span class="label">Измерить качество</span>
+      <button class="mini" id="benchBtn">Прогнать набор</button>
+      <p class="note">Прогоняет набор задач с заведомо падающими тестами и считает, сколько из них AZRAIL реально починил. Каждая задача — полная миссия, поэтому спрашивает подтверждение с ценой. Нужна контейнерная песочница.</p>
+      <div class="out hidden" id="benchOut"></div>
+    </div>
+
+    <div class="row">
       <span class="label">Движение</span>
       <button class="mini" id="motionBtn">Переключить</button>
       <p class="note">Пульсация индикаторов работы. При выключенных системных анимациях движение по умолчанию отключено — эта кнопка возвращает его вручную.</p>
@@ -1017,7 +1081,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     </div>
   </section>
 
-  <footer>api того же origin · /health · /api/task · /api/mission · /api/selftest</footer>
+  <footer>api того же origin · /health · /api/task · /api/mission · /api/bench · /api/selftest</footer>
 </main>
 
 <section class="view hidden" id="viewSkills" aria-label="Умения">
@@ -1204,7 +1268,15 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
         var data;
         try { data = JSON.parse(raw); } catch (e) { data = { summary: raw }; }
         if (!r.ok) {
-          throw new Error((data && (data.error || data.summary)) || ('HTTP ' + r.status));
+          var err = new Error((data && (data.error || data.summary)) || ('HTTP ' + r.status));
+          // Тело ответа прикладывается к ошибке, а не выбрасывается.
+          // Некоторые отказы СОДЕРЖАТЕЛЬНЫ: /api/bench без подтверждения
+          // возвращает состав набора и оценку стоимости — именно то, что
+          // нужно показать перед согласием. Раньше от такого ответа
+          // оставалась одна строка текста.
+          err.payload = data;
+          err.status = r.status;
+          throw err;
         }
         return data;
       });
@@ -1341,6 +1413,13 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     // AbortController живёт на всю задачу: нужен и кнопке «Отменить», и
     // самому fetch ниже. Браузерная поддержка сплошная, полифилл не нужен.
     var inflight = new AbortController();
+    // Идентификатор фоновой миссии и таймер её опроса. Живут на всю
+    // задачу: их нужно видеть и обработчику «Отменить», и завершению.
+    var missionId = null;
+    var pollTimer = null;
+    function stopPolling() {
+      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    }
 
     show('workStage');
     setPulse('busy', 'работаю');
@@ -1365,19 +1444,89 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
 
     $('cancelBtn').onclick = function () {
       cancelled = true;
-      // Реально обрываем HTTP-запрос, а не только прячем экран. До этой
-      // правки «Отменить» было косметикой: запрос продолжал висеть и
-      // модель дорабатывала (и тратилась) впустую.
+      // Обрываем HTTP-запрос. Для одиночной задачи этого достаточно.
       if (inflight) inflight.abort();
+      // А для МИССИИ — нет. Она больше не живёт внутри этого запроса:
+      // цикл идёт в фоне на сервере и об оборванном соединении не знает
+      // вовсе. Без явной команды он продолжал бы жечь модели и бюджет
+      // записей до самого потолка шагов. Останов происходит на границе
+      // шага — рвать на середине записи файла нельзя.
+      if (missionId) {
+        api('/api/mission/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ missionId: missionId })
+        }).catch(function () { /* миссия могла успеть завершиться сама */ });
+      }
+      stopPolling();
       stop();
-      show('askStage');
+      showHintBar(false); show('askStage');
       setPulse('on', 'на связи');
     };
+
+    /* ── Подсказка в идущую миссию ────────────────────────────────────
+     *
+     * Строка показывается ТОЛЬКО когда есть missionId: у одиночной задачи
+     * подсказку некому прочитать, и предлагать её значило бы обещать
+     * несуществующее. Функция видна ровно тогда, когда ею можно
+     * воспользоваться.
+     */
+    function showHintBar(on) {
+      var bar = $('hintBar');
+      if (!bar) return;
+      bar.classList.toggle('hidden', !on);
+      if (!on) $('hintInput').value = '';
+    }
+
+    function sendHint() {
+      var input = $('hintInput');
+      var text = (input.value || '').trim();
+      if (!text || !missionId) return;
+
+      var btn = $('hintBtn');
+      btn.disabled = true;
+      // Поле чистится СРАЗУ: подсказка уже ушла, и повторное нажатие по
+      // той же строке отправило бы её дважды.
+      input.value = '';
+
+      api('/api/mission/hint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ missionId: missionId, text: text })
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; });
+      }).then(function (data) {
+        // Отказ произносится вслух. Молчаливая неудача здесь хуже всего:
+        // человек будет считать, что агент услышал, и ждать реакции.
+        if (data && data.error) {
+          traceEvent({ event: 'hint.rejected', reason: data.error });
+        }
+      }).catch(function () {
+        traceEvent({ event: 'hint.rejected', reason: 'не отправилось' });
+      }).then(function () {
+        btn.disabled = false;
+      });
+    }
+
+    $('hintBtn').onclick = sendHint;
+    $('hintInput').onkeydown = function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); sendHint(); }
+    };
+
+    // Ключ идемпотентности — на миссию. Мобильная связь рвётся, палец
+    // срывается на двойное нажатие, клиент повторяет запрос сам: раньше
+    // каждый такой случай запускал ВТОРУЮ миссию со вторым расходом
+    // моделей, и заметить это можно было только по счёту.
+    var runKey = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : String(Date.now()) + '-' + Math.random().toString(36).slice(2);
 
     api(autonomous ? '/api/mission' : '/api/task', {
       method: 'POST',
       signal: inflight.signal,
-      headers: { 'Content-Type': 'application/json' },
+      headers: autonomous
+        ? { 'Content-Type': 'application/json', 'Idempotency-Key': runKey }
+        : { 'Content-Type': 'application/json' },
       // intent намеренно не передаётся: по спецификации задачу
       // определяет сам AZRAIL, пользователь ничего не выбирает.
       // preferredModel — другая ось: НЕ что делать, а насколько
@@ -1398,26 +1547,87 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     })
       .then(function (data) {
         if (cancelled) return;
+
+        /* Миссия больше НЕ возвращает результат из POST.
+           Раньше весь цикл шёл внутри одного HTTP-запроса, и любая работа
+           длиннее полутора минут обрывалась на стороне Cloudflare: экран
+           показывал ошибку, хотя на сервере всё продолжалось. Теперь POST
+           отвечает 202 и отдаёт только идентификатор, а за ходом работы
+           следим опросом. */
+        if (data && data.status === 'accepted' && data.missionId) {
+          missionId = data.missionId;
+          // Теперь есть кому услышать — открываем строку подсказки.
+          showHintBar(true);
+          if (data.deduplicated) {
+            askNote('Такой запрос уже запущен — показываю его, а не создаю второй.');
+          }
+          pollMission();
+          return;
+        }
+
         var secs = stop();
-        // Ответ миссии завёрнут в { missionId, result } — разворачиваем,
-        // чтобы render получил результат в том же виде, что от /api/task.
         var shown = data && data.result ? data.result : data;
         addVersion(shown, secs);
         render(shown, secs);
-
-        // Отчёт по канону лежит в GET-ответе, а не в POST: миссия
-        // возвращает результат, разбор — отдельным чтением. До сих пор
-        // этот маршрут не читал никто, и всё, что он отдаёт, копилось зря.
-        if (data && data.missionId) {
-          api('/api/mission?missionId=' + encodeURIComponent(data.missionId))
-            .then(function (rep) { if (!cancelled) renderCanon(rep && rep.canon); })
-            .catch(function () { /* отчёт необязателен: миссия уже выполнена */ });
-        }
       })
       .catch(function (err) {
         if (cancelled) return;
+        stopPolling();
         render({ status: 'failed', agent: '', summary: '', error: String(err.message || err) }, stop());
       });
+
+    /* Опрос состояния фоновой миссии.
+       Живой журнал по WebSocket показывает ход, но полагаться на него
+       нельзя: сокет может быть не подключён, а связь на мобильном — рваться.
+       Опрос — то, что доводит результат до экрана при любом раскладе.
+
+       Интервал растёт от двух секунд к десяти: первые шаги короткие, а
+       потом обращения впустую только тратят батарею. */
+    function pollMission() {
+      var delay = 2000;
+      var deadAt = Date.now() + 30 * 60 * 1000;
+
+      function tick() {
+        if (cancelled || !missionId) return;
+        if (Date.now() > deadAt) {
+          stopPolling();
+          render({ status: 'failed', agent: '', summary: '',
+                   error: 'Миссия не ответила за 30 минут. Найди её в журнале по идентификатору ' + missionId + '.' }, stop());
+          return;
+        }
+
+        api('/api/mission?missionId=' + encodeURIComponent(missionId))
+          .then(function (rep) {
+            if (cancelled) return;
+            if (!rep || !rep.done) {
+              delay = Math.min(10000, Math.round(delay * 1.4));
+              pollTimer = setTimeout(tick, delay);
+              return;
+            }
+            stopPolling();
+            var secs = stop();
+            var shown = rep.result || {
+              status: (rep.mission && rep.mission.status) === 'completed' ? 'done' : 'failed',
+              agent: 'execution-engine',
+              // Результата в базе нет — такое бывает на базе без миграции
+              // 002. Врать про успех нельзя, поэтому показываем статус как
+              // есть, а не выдуманный текст.
+              summary: 'Миссия завершена со статусом: ' + ((rep.mission && rep.mission.status) || 'неизвестно') + '.'
+            };
+            addVersion(shown, secs);
+            render(shown, secs);
+            renderCanon(rep.canon);
+          })
+          .catch(function () {
+            // Разрыв связи — не повод считать миссию упавшей: она идёт на
+            // сервере независимо от того, смотрит ли кто-то. Пробуем реже.
+            delay = Math.min(10000, Math.round(delay * 1.6));
+            pollTimer = setTimeout(tick, delay);
+          });
+      }
+
+      pollTimer = setTimeout(tick, delay);
+    }
   }
 
   /* Отчёт по канону.
@@ -1600,7 +1810,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       });
       addAct('Проверить безопасность', function () {
         ta.value = 'Проверь на уязвимости файлы, которые ты только что сгенерировал.';
-        show('askStage');
+        showHintBar(false); show('askStage');
         send();
       });
       actsBox.classList.remove('hidden');
@@ -1623,7 +1833,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     if (lastPrompt) {
       addAct('Ещё вариант', function () {
         ta.value = lastPrompt;
-        show('askStage');
+        showHintBar(false); show('askStage');
         send();
       });
       actsBox.classList.remove('hidden');
@@ -2058,7 +2268,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     $('attached').classList.add('hidden');
     undoBtn = null; // узел удалён вместе с содержимым контейнера выше
     resetTrace();
-    ta.value = ''; grow(); show('askStage'); ta.focus();
+    ta.value = ''; grow(); showHintBar(false); show('askStage'); ta.focus();
   });
 
   $('token').value = token;
@@ -2086,6 +2296,62 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     api('/api/selftest')
       .then(function (d) { out.textContent = JSON.stringify(d, null, 2); })
       .catch(function (e) { out.textContent = 'не вышло: ' + (e.message || e); });
+  });
+
+  /* Измеритель качества.
+     Двухшаговый намеренно: первый запрос без confirm возвращает состав
+     набора и оценку числа вызовов модели, и только потом спрашивается
+     согласие. Решение о дорогой операции принимают, зная цену, а не
+     после счёта. */
+  $('benchBtn').addEventListener('click', function () {
+    var out = $('benchOut');
+    out.classList.remove('hidden');
+    out.textContent = 'считаю стоимость…';
+
+    api('/api/bench', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    })
+      .then(function () {
+        // Сервер обязан отказать без confirm. Если согласился — молчать
+        // об этом нельзя: значит защита от дорогого прогона не работает.
+        out.textContent = 'Неожиданно: прогон начался без подтверждения. Проверь /api/bench.';
+      })
+      .catch(function (e) {
+        var plan = e && e.payload;
+        if (!plan || !plan.cases) { out.textContent = 'не вышло: ' + (e.message || e); return; }
+
+        var ok = window.confirm(
+          'Прогон ' + plan.cases.length + ' задач, до ' + plan.estimatedModelCalls +
+          ' вызовов модели. Это полные миссии, они тратят бюджет. Запускать?'
+        );
+        if (!ok) { out.textContent = 'отменено'; return; }
+
+        out.textContent = 'иду по задачам, это долго…';
+        api('/api/bench', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirm: true })
+        })
+          .then(function (d) {
+            var r = d.report || {};
+            var lines = [
+              'оценка: ' + r.score + '% (решено ' + r.solved + ' из ' + r.measured + ' годных)',
+              'сломано: ' + r.regressed + '   негодных: ' + r.invalid + '   не измерено: ' + r.unmeasured,
+              'медиана времени: ' + Math.round((r.medianDurationMs || 0) / 1000) + ' с',
+              ''
+            ];
+            (d.outcomes || []).forEach(function (o) {
+              lines.push(o.caseId + ' — ' + (o.error ? o.error : (o.after && o.after.ok ? 'решено' : 'не решено')));
+            });
+            if (d.problems && d.problems.length) {
+              lines.push('', 'проблемы набора: ' + d.problems.join('; '));
+            }
+            out.textContent = lines.join('\n');
+          })
+          .catch(function (err) { out.textContent = 'не вышло: ' + (err.message || err); });
+      });
   });
 
   function toggleMotion() {
@@ -2170,12 +2436,25 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     }
     if (ws && ws.readyState === WebSocket.OPEN) return;
 
-    // Токен — в query, не в заголовке: WebSocket-конструктор браузера не
-    // даёт выставить Authorization. См. checkAuth в lib/auth.ts за тем,
-    // почему это не более слабая проверка, а тот же токен другим каналом.
-    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var url = proto + '//' + location.host + '/api/stream?token=' + encodeURIComponent(token);
+    // Конструктор WebSocket не даёт выставить Authorization — это
+    // ограничение браузерного API. Раньше сюда клался сам AZRAIL_TOKEN, и
+    // постоянный ключ от всех платных эндпоинтов оседал в логах
+    // Cloudflare, в истории браузера и в Referer. Теперь в строке запроса
+    // едет одноразовый билет: живёт минуту, гасится при первом
+    // использовании (см. lib/ws-ticket.ts). Утечь может так же — но
+    // утекает уже мусор.
     $('wsBadge').textContent = 'подключаюсь…';
+    api('/api/stream/ticket', { method: 'POST' })
+      .then(function (t) { openSocket(t.ticket); })
+      .catch(function (e) {
+        $('wsBadge').textContent = 'ошибка соединения'; $('wsBadge').className = 'badge bad';
+        chatHint('Не удалось получить билет: ' + (e && e.message ? e.message : 'нет ответа'));
+      });
+  }
+
+  function openSocket(ticket) {
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var url = proto + '//' + location.host + '/api/stream?ticket=' + encodeURIComponent(ticket);
     ws = new WebSocket(url);
 
     ws.onopen = function () {
@@ -2309,6 +2588,11 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       $('mprogFill').style.width = '100%';
       $('mprogStep').textContent = 'готово';
     }
+    if (ev.event === 'mission.cancelled') {
+      // Отдельно от 'failed': остановлено по команде — это не поломка, и
+      // называть это ошибкой значит пугать там, где всё шло по плану.
+      $('mprogStep').textContent = 'остановлено вручную';
+    }
     if (ev.event === 'mission.failed' || ev.event === 'mission.exhausted') {
       // Полосу НЕ доводим до ста: незакрытая задача не должна выглядеть
       // выполненной. Оставляем там, где реально остановились.
@@ -2382,19 +2666,45 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       box.appendChild(ni);
     } else if (ev.event === 'snapshot.taken' || ev.event === 'rollback.done' ||
                ev.event === 'loop.detected' || ev.event === 'tests.baseline' ||
-               ev.event === 'tests.regressed') {
+               ev.event === 'tests.regressed' || ev.event === 'tests.verified' ||
+               ev.event === 'tests.failed' || ev.event === 'tests.unavailable' ||
+               ev.event === 'repo.mapped' || ev.event === 'plan.revised' ||
+               ev.event === 'plan.revise_skipped' || ev.event === 'scouts.started' ||
+               ev.event === 'scouts.done' || ev.event === 'scouts.failed' ||
+               ev.event === 'memory.recalled' || ev.event === 'usage.summary' ||
+               ev.event === 'tests.rolled_back' || ev.event === 'hint.received' ||
+               ev.event === 'memory.saved' || ev.event === 'check.unverified') {
       // Защитные события — отдельными строками. Особенно откат: без него
       // непонятно, в каком состоянии остался проект после провала.
       if (prev) prev.className = 'ok';
       var g = document.createElement('li');
-      var bad = ev.event === 'tests.regressed' || ev.event === 'loop.detected';
+      // «Не удалось прогнать» — не провал работы, а отсутствие проверки.
+      // Красить это красным значит говорить, что сделано плохо, хотя про
+      // качество ничего не известно.
+      var bad = ev.event === 'tests.regressed' || ev.event === 'loop.detected' ||
+                ev.event === 'tests.failed';
       g.className = bad ? 'bad' : 'ok';
       g.textContent = {
         'snapshot.taken': 'снимок сделан (' + (ev.files || 0) + ' файл.)',
         'rollback.done': 'изменения откачены',
         'loop.detected': 'замечен повтор шага',
         'tests.baseline': 'замер тестов до работы',
-        'tests.regressed': 'тесты стали хуже'
+        'tests.regressed': 'тесты стали хуже',
+        'tests.verified': 'тесты прогнаны — зелено',
+        'tests.failed': 'тесты прогнаны — падают',
+        'tests.unavailable': 'прогнать тесты не удалось',
+        'repo.mapped': 'карта проекта построена',
+        'plan.revised': 'план пересобран',
+        'plan.revise_skipped': 'пересобрать план не вышло',
+        'scouts.started': 'разведка пошла',
+        'scouts.done': 'разведка доложила',
+        'scouts.failed': 'разведка не удалась',
+        'memory.recalled': 'вспомнил прошлые миссии',
+        'usage.summary': 'расход миссии',
+        'tests.rolled_back': 'правки откачены, пробую иначе',
+        'hint.received': 'услышал подсказку',
+        'memory.saved': 'запомнил на будущее',
+        'check.unverified': 'проверка не состоялась'
       }[ev.event] || ev.event;
       if (ev.reason) {
         var gr = document.createElement('span');
@@ -2425,8 +2735,8 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
         ck.appendChild(r);
       }
       box.appendChild(ck);
-    } else if (ev.event === 'mission.completed' || ev.event === 'mission.failed' || ev.event === 'mission.exhausted') {
-      if (prev) prev.className = ev.event === 'mission.failed' ? 'bad' : 'ok';
+    } else if (ev.event === 'mission.completed' || ev.event === 'mission.failed' || ev.event === 'mission.exhausted' || ev.event === 'mission.cancelled') {
+      if (prev) prev.className = (ev.event === 'mission.failed' || ev.event === 'mission.cancelled') ? 'bad' : 'ok';
     }
   }
 
@@ -2795,7 +3105,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       var openId = b.getAttribute('data-open');
       if (openId) { openView(openId); return; }
       var goto = b.getAttribute('data-goto');
-      if (goto === 'askStage') { openView('viewHome'); show('askStage'); ta.focus(); }
+      if (goto === 'askStage') { openView('viewHome'); showHintBar(false); show('askStage'); ta.focus(); }
     });
   });
 
@@ -2850,6 +3160,10 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     $('layout').classList.add('nav-closed');
     $('menuBtn').setAttribute('aria-expanded', 'false');
     if (navVeil) { navVeil.remove(); navVeil = null; }
+    // Фон снова прокручивается. Пока меню лежало поверх, страница под ним
+    // уезжала от случайного движения пальца — и было непонятно, что вообще
+    // двигается: меню или то, что под ним.
+    document.body.style.overflow = '';
   }
 
   function openNav() {
@@ -2862,6 +3176,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       navVeil.className = 'nav-veil';
       navVeil.addEventListener('click', closeNav);
       document.body.appendChild(navVeil);
+      document.body.style.overflow = 'hidden';
     }
   }
 

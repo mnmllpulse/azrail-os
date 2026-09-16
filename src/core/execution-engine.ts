@@ -1,11 +1,28 @@
 import type { Env, TaskRequest, TaskResult, ToolName } from "../types";
-import { editFile, listFiles, readFile, searchFiles, writeFile } from "../lib/workspace";
+import { applyPatch, editFile, listFiles, readFile, searchFiles, writeFileGuarded } from "../lib/workspace";
+import { parseHunks } from "../lib/patch";
 import { describeTools, availableTools, TOOL_REGISTRY } from "../lib/tool-registry";
 import { extractText, runModel } from "../lib/model-router";
 import { emitMissionEvent } from "../lib/event-store";
+import { detectTestCommand, diffWorkspace, renderChanges, type WorkspaceFile } from "./verification";
+import { buildReflection } from "./reflection";
+import { buildRepoMap, renderRepoMap } from "./repo-map";
+import { planScoutQuestions, renderFindings, runScouts, shouldScout } from "./scout";
+import { syncWorkspaceToSandbox, SANDBOX_WORKDIR } from "./workspace-sync";
 import { log } from "../lib/resilience";
-import { rememberFact } from "../lib/memory-agent";
-import { type PlanStep, parsePlan, savePlan, advancePlan, renderPlan, planProgress } from "./planner";
+import { recallContext, rememberFact } from "../lib/memory-agent";
+import { UsageLedger, renderUsage } from "../lib/usage";
+import {
+  type PlanStep,
+  parsePlan,
+  savePlan,
+  advancePlan,
+  renderPlan,
+  planProgress,
+  revisePlan,
+  planExhausted,
+  MAX_REVISIONS,
+} from "./planner";
 import { checkResult, findTestEvidence, CHECK_LIMITS } from "./checker";
 import { detectBackend, describeBackend, parseTestOutput, truncateOutput, runInContainer, getContainer, exposeSandboxPort } from "./sandbox";
 import {
@@ -24,6 +41,15 @@ export interface ExecutionContext {
   /** Явно закреплённая пользователем модель. Проходит насквозь в каждое
    *  решение цикла — иначе выбор модели действовал бы только на первый шаг. */
   preferredModel?: string;
+  /**
+   * Копилка расхода моделей за миссию.
+   *
+   * Идёт в ctx, а не заводится на месте каждого вызова, ровно по той же
+   * причине, что и preferredModel: заведённая на месте, она считала бы
+   * только один шаг — а вопрос «во что обошлась МИССИЯ» остался бы без
+   * ответа, как и был.
+   */
+  usage?: UsageLedger;
   /**
    * Живая трансляция шага наружу. Необязательная: запись в D1 идёт всегда и
    * не зависит от этого — тут только показ «прямо сейчас». Если обработчик
@@ -59,6 +85,32 @@ export interface ExecutionContext {
    * иначе на своём домене предпросмотр вёл бы на чужой адрес.
    */
   publicHostname?: string;
+
+  /**
+   * Проверка «не велели ли остановиться». Спрашивается на границе каждой
+   * итерации, до вызова модели.
+   *
+   * Почему callback, а не флаг: миссия теперь идёт в Durable Object, а
+   * команда «стоп» приходит отдельным HTTP-запросом и меняет строку в D1.
+   * Значение, снятое один раз на старте, устарело бы к первому же шагу —
+   * спрашивать надо каждый раз заново. Обрыв возможен только МЕЖДУ шагами:
+   * рвать на середине записи файла значит оставить проект в состоянии,
+   * которого не было ни до, ни после.
+   */
+  shouldAbort?: () => boolean | Promise<boolean>;
+
+  /**
+   * Подсказки, пришедшие от человека посреди миссии.
+   *
+   * Спрашивается на каждом шаге по той же причине, что и shouldAbort:
+   * подсказку присылают отдельным запросом, и значение, снятое на старте,
+   * устареет к первому же шагу.
+   *
+   * Функция ЗАБИРАЕТ подсказки, а не подсматривает их: подсказка,
+   * пережившая свой шаг, будет повторена на следующем, и агент получит
+   * её дважды как настойчивое требование.
+   */
+  takeHints?: () => Promise<string[]>;
 }
 
 /** Решение модели на одном шаге: либо позвать инструмент, либо закончить. */
@@ -68,6 +120,13 @@ export interface StepDecision {
   reason?: string;
   done?: boolean;
   summary?: string;
+  /** Модель заявляет, что план неверен и его надо пересобрать.
+   *
+   *  До этого поля у модели не было способа сказать об этом: план строился
+   *  один раз и дальше жил как есть. Обнаружив на третьем шаге, что план
+   *  был неверен, модель могла только молча делать своё — а план
+   *  продолжал показываться ей в каждом запросе и тянуть обратно. */
+  replan?: boolean;
 }
 
 /** Одна запись в истории цикла — что позвали и что получилось. */
@@ -88,10 +147,22 @@ const LOOP_SYSTEM_PROMPT = `Ты — исполнительное ядро AZRAI
 Формат для завершения:
 {"done":true,"summary":"что сделано"}
 
+Формат для пересборки плана:
+{"replan":true,"reason":"почему план больше не годится"}
+Это не признание поражения. План строился до того, как ты увидел проект;
+если он расходится с тем, что ты выяснил, — скажи об этом, а не делай
+вид, что идёшь по нему.
+
 ПРАВИЛА:
 - Зови только инструменты из списка доступных. Другого списка нет.
 - Один шаг — один вызов. Не пытайся сделать всё сразу.
-- Прежде чем менять файл, прочитай его: write_file затирает содержимое целиком.
+- Прежде чем менять файл, прочитай его.
+- ПРАВКА СУЩЕСТВУЮЩЕГО ФАЙЛА: одно место — edit_file, несколько мест — apply_patch
+  (массив hunks, каждый со своим search и replace; применяется всё или ничего).
+  write_file — только для НОВЫХ файлов: он затирает содержимое целиком, и для
+  существующего файла будет отклонён.
+- Фрагмент в search копируй из файла точно, вместе с отступами и переносами строк.
+  Если фрагмент встречается несколько раз — добавь окружающие строки, иначе будет отказ.
 - Если задача выполнена — верни done. Не делай лишних шагов ради видимости работы.
 - Если задачу нельзя выполнить доступными инструментами — верни done с честным объяснением, почему. Не притворяйся, что сделал.
 - Не выдумывай пути файлов: сначала list_files или search_files.`;
@@ -109,7 +180,27 @@ export class ExecutionEngine {
         return readFile(this.env, ctx.projectId!, String(input.path ?? ""));
       case "write_file":
         this.requireProject(ctx);
-        return writeFile(this.env, ctx.projectId!, String(input.path ?? ""), String(input.content ?? ""));
+        /* Перезапись существующего файла требует явного согласия.
+         *
+         * Раньше здесь был прямой writeFile: модель присылала новый текст,
+         * и файл заменялся целиком. Для файла в пятьсот строк это способ
+         * потерять четыреста восемьдесят — предупреждение об этом висело в
+         * системном промпте, то есть проблему знали и надеялись на
+         * осторожность модели. Надежда заменена отказом с подсказкой. */
+        return writeFileGuarded(
+          this.env,
+          ctx.projectId!,
+          String(input.path ?? ""),
+          String(input.content ?? ""),
+          { overwrite: input.overwrite === true, shrink: input.shrink === true },
+        );
+
+      case "apply_patch": {
+        this.requireProject(ctx);
+        const parsed = parseHunks(input.hunks);
+        if ("error" in parsed) throw new Error(parsed.error);
+        return applyPatch(this.env, ctx.projectId!, String(input.path ?? ""), parsed.hunks);
+      }
       case "edit_file":
         this.requireProject(ctx);
         return editFile(this.env, ctx.projectId!, String(input.path ?? ""), String(input.search ?? ""), String(input.replacement ?? ""));
@@ -144,7 +235,7 @@ export class ExecutionEngine {
               this.env,
               "chat",
               { messages: [{ role: "user", content: String(input.prompt ?? "") }] },
-              { preferredModel: ctx.preferredModel },
+              { preferredModel: ctx.preferredModel, ledger: ctx.usage },
             )
           ).output,
         );
@@ -252,6 +343,36 @@ export class ExecutionEngine {
           );
         }
 
+        /* ПРОГОН НА ТОМ, ЧТО НАПИСАЛ АГЕНТ, — а не на закоммиченном.
+         *
+         * Раньше этот инструмент ВСЕГДА уходил в QA Agent и гонял GitHub
+         * Actions, то есть проверял содержимое репозитория. А рабочая
+         * область проекта живёт в R2, и пока миссия не сделала коммит,
+         * её правок в репозитории нет вовсе. Инструмент честно возвращал
+         * результат — предыдущего прогона чужого кода, и этот результат
+         * принимался за проверку только что сделанной работы.
+         *
+         * Теперь при наличии контейнера файлы заливаются в него и тесты
+         * гоняются прямо на них. Actions остаются запасным путём для
+         * тех, у кого контейнера нет. */
+        if (backend === "container" && ctx.projectId) {
+          const local = await this.runTestsInContainer(ctx.projectId);
+          if (local) return { ...local, backend };
+          // Прогонять нечем (тестов в проекте нет) — это не ошибка, но и
+          // не успех. Возврат ниже по ветке Actions был бы подменой: он
+          // рассказал бы про чужой прогон.
+          return {
+            passed: 0,
+            failed: 0,
+            total: 0,
+            ok: false,
+            runner: "none",
+            failures: [],
+            backend,
+            output: "В проекте не найдено ни scripts.test, ни файлов *.test.* — прогонять нечего.",
+          };
+        }
+
         const res = await this.viaAgent(ctx, "qa", {
           projectId: ctx.projectId,
           qaOp: input.workflow
@@ -345,17 +466,6 @@ export class ExecutionEngine {
     // Сбой планирования миссию НЕ останавливает: цикл умеет работать и
     // без плана, просто хуже держит цель. Терять работоспособность
     // ради надстройки неправильно.
-    let plan: PlanStep[] = [];
-    try {
-      plan = await this.buildPlan(goal, toolList, maxIterations, ctx);
-      if (plan.length) await this.note(ctx, "plan.ready", { steps: plan.length });
-    } catch (err) {
-      log("warn", "plan.build_failed", {
-        missionId: ctx.missionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
     let rejections = 0;
 
     /* ── Снимок рабочей области ДО работы ──────────────────────────
@@ -365,6 +475,155 @@ export class ExecutionEngine {
      *
      * Снимок необязателен: новый проект без файлов — обычный случай, и
      * требовать там снимок было бы абсурдом. */
+    /* Содержимое файлов ДО работы — для показа проверяющему.
+     *
+     * Снимок в R2 (ниже) нужен для отката, а это — для ответа на вопрос
+     * «что вообще изменилось». Без него проверяющий видит ПЕРЕСКАЗ
+     * работы, а пересказ легко выглядит убедительно при пустом
+     * результате: «прочитал файл, понял проблему, записал исправление»
+     * читается как работа, даже если записанное ничего не меняет. */
+    let filesBefore: WorkspaceFile[] = [];
+    if (ctx.projectId) {
+      try {
+        filesBefore = await this.readWorkspace(ctx.projectId);
+      } catch {
+        // Не прочиталось — проверка пойдёт без диффа, как раньше.
+      }
+    }
+
+    /* ── Карта проекта ────────────────────────────────────────────────
+     *
+     * Модель видит инструменты и историю своих вызовов, но НЕ ВИДИТ
+     * проект. Отсюда самый частый класс ошибок — не в коде, а в том, где
+     * код: выдуманные пути, правка не того файла, попытка написать
+     * заново то, что уже лежит в соседней папке.
+     *
+     * Строится ОДИН РАЗ за миссию из уже прочитанных файлов — лишнего
+     * чтения это не стоит. Обновлять её по ходу незачем: миссия меняет
+     * единицы файлов, а карта отвечает на вопрос «где искать», и ответ
+     * от одной правки не меняется.
+     */
+    let repoMap = "";
+    if (filesBefore.length) {
+      repoMap = renderRepoMap(buildRepoMap(filesBefore));
+      await this.note(ctx, "repo.mapped", {
+        reason: `в карте ${filesBefore.length} файлов`,
+      });
+    }
+
+    /* ── ЧТО УЖЕ ИЗВЕСТНО ПРО ЭТОТ ПРОЕКТ ───────────────────────────
+     *
+     * Здесь ничего не было — и это был самый обидный пробел во всей
+     * системе. Цикл вызывал rememberFact в конце каждой миссии, факты
+     * ложились в D1, функция recallContext была написана с комментарием
+     * «то, что реально спрашивается перед каждым решением» — и не
+     * вызывалась НИКЕМ. AZRAIL копил знание о проекте и каждую следующую
+     * миссию начинал с чистого листа.
+     *
+     * Память идёт ПЕРЕД картой и разведкой: она дешевле обеих (одно
+     * чтение из D1) и может сделать их лишними. Знание «обработчик задач
+     * в src/routes/api.ts» стоит трёх разведчиков.
+     */
+    let memoryBlock = "";
+    if (ctx.projectId) {
+      try {
+        const recalled = await recallContext(this.env, ctx.projectId);
+        if (recalled) {
+          memoryBlock =
+            `ИЗВЕСТНО ПО ПРОШЛЫМ МИССИЯМ (свежие записи; это не гарантия, ` +
+            `проверяй, если решение зависит от факта):\n${recalled}`;
+          await this.note(ctx, "memory.recalled", { reason: `записей: ${recalled.split("\n").length}` });
+        }
+      } catch (err) {
+        log("warn", "memory.recall_failed", {
+          missionId: ctx.missionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    /* ── Параллельная разведка ────────────────────────────────────────
+     *
+     * Разбор проекта съедал контекст главного цикла: list_files, потом
+     * read_file, потом ещё read_file — и каждый ответ ложился в историю
+     * целиком. К моменту решения история забита содержимым файлов,
+     * половина из которых оказалась ни при чём, а задача — далеко в
+     * начале запроса, там, где модель помнит хуже всего.
+     *
+     * Разведчики идут ОДНОВРЕМЕННО и каждый со своим контекстом. Сюда
+     * возвращаются не файлы, а несколько строк вывода на вопрос.
+     * Читают все, пишет по-прежнему один — этот цикл.
+     */
+    let scoutReport = "";
+    if (
+      ctx.projectId &&
+      shouldScout({ fileCount: filesBefore.length, maxIterations, goal })
+    ) {
+      const ask = async (prompt: string, system: string) => {
+        const routed = await runModel<{ response?: string }>(
+          this.env,
+          "scout",
+          { messages: [{ role: "system", content: system }, { role: "user", content: prompt }] },
+          { preferredModel: ctx.preferredModel, ledger: ctx.usage },
+        );
+        return extractText(routed.output);
+      };
+
+      try {
+        const questions = await planScoutQuestions({ ask }, goal, repoMap);
+        if (questions.length) {
+          await this.note(ctx, "scouts.started", { reason: questions.join(" | "), count: questions.length });
+          const findings = await runScouts(
+            {
+              ask,
+              // Инструменты идут через тот же executeTool, что и у главного
+              // цикла: отдельная реализация чтения разошлась бы с основной
+              // по поведению — и разведка докладывала бы про другой проект.
+              runTool: (tool, input) => this.executeTool(tool, input, ctx),
+            },
+            questions,
+            repoMap,
+          );
+          scoutReport = renderFindings(findings);
+          await this.note(ctx, "scouts.done", {
+            reason: `выводов: ${findings.filter((f) => f.ok).length} из ${findings.length}`,
+          });
+        }
+      } catch (err) {
+        // Разведка вспомогательна. Не вышла — работаем как раньше.
+        await this.note(ctx, "scouts.failed", {
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+
+    /* План строится ПОСЛЕ карты и разведки, а не до них.
+     *
+     * Раньше он был самым первым действием миссии — то есть
+     * составлялся в полном неведении о проекте. Отсюда и брались
+     * шаги вроде «открыть файл конфигурации», которого в проекте нет.
+     * Теперь модель планирует, уже зная, где что лежит и что выяснила
+     * разведка: это тот же один вызов, но по фактам, а не вслепую. */
+    let plan: PlanStep[] = [];
+    /** Сколько раз план уже пересобирали. Без потолка цикл сползает в
+     *  «планирую, как планировать»: каждая неудача рождает новый план,
+     *  новый план — новую неудачу, и потолок шагов уходит в никуда. */
+    let revisions = 0;
+    /** Сколько раз правки откатывались из-за сломанных тестов. Больше
+     *  одного раза не пробуем: цикл «сломал — откатил — сломал иначе»
+     *  сжигает бюджет, и каждый его виток выглядит как прогресс. */
+    let regressions = 0;
+    try {
+      plan = await this.buildPlan(goal, toolList, maxIterations, ctx, repoMap, scoutReport, memoryBlock);
+      if (plan.length) await this.note(ctx, "plan.ready", { steps: plan.length });
+    } catch (err) {
+      log("warn", "plan.build_failed", {
+        missionId: ctx.missionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     let snapshot: Snapshot | null = null;
     let snapshotKey = "";
     if (ctx.projectId) {
@@ -399,9 +658,57 @@ export class ExecutionEngine {
     }
 
     for (let i = 0; i < maxIterations; i++) {
+      /* ── Точка останова ────────────────────────────────────────────
+       * До этой проверки запущенную миссию нельзя было прекратить ничем:
+       * кнопка «Отменить» в интерфейсе рвала HTTP-соединение, а цикл на
+       * сервере продолжал жечь модели и бюджет записей до maxIterations,
+       * ни о чём не подозревая.
+       *
+       * Проверка стоит ПЕРЕД решением шага, а не после: иначе отмена
+       * оплачивала бы ещё один вызов модели ради права остановиться. */
+      if (ctx.shouldAbort && (await ctx.shouldAbort())) {
+        await this.note(ctx, "mission.cancelled", { reason: "остановлено владельцем", iteration: i });
+        return {
+          status: "failed",
+          agent: "execution-engine",
+          summary: `Миссия остановлена по команде на шаге ${i + 1}. Сделанное сохранено, откат не выполнялся.`,
+          error: "cancelled",
+          data: { missionId: ctx.missionId, steps: history, iterations: i, plan, cancelled: true },
+        };
+      }
+
+      /* ── Слово человека посреди работы ────────────────────────────
+       *
+       * До этого в идущую миссию можно было вмешаться только топором:
+       * отменить. Видишь по карте, что агент пошёл не туда, — и
+       * единственный доступный жест это убить всё вместе с наработанным
+       * контекстом. Для миссии на десять минут это дорого до нелепости.
+       *
+       * Подсказка кладётся в историю как шаг, а не подмешивается в
+       * системный промпт: история — это то, что произошло, и «владелец
+       * сказал X» произошло ровно так же, как вызов инструмента. В
+       * промпте она стояла бы вне времени, и модель не поняла бы, что
+       * сказанное относится к последнему шагу, а не к заданию целиком.
+       */
+      if (ctx.takeHints) {
+        const hints = await ctx.takeHints();
+        for (const hint of hints) {
+          history.push({
+            tool: "hint",
+            input: {},
+            // ok: true — это не сбой. Пометив подсказку неудачей, мы бы
+            // накрутили счётчик провалов и оборвали миссию за то, что
+            // человек попытался помочь.
+            ok: true,
+            result: `ВЛАДЕЛЕЦ ВМЕШАЛСЯ ПО ХОДУ РАБОТЫ: "${hint}"\nЭто важнее твоего текущего плана. Учти сказанное на следующем шаге.`,
+          });
+          await this.note(ctx, "hint.received", { reason: hint, iteration: i });
+        }
+      }
+
       let decision: StepDecision;
       try {
-        decision = await this.decideNextStep(goal, toolList, history, i, maxIterations, ctx, plan);
+        decision = await this.decideNextStep(goal, toolList, history, i, maxIterations, ctx, plan, repoMap, scoutReport, memoryBlock);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         await this.note(ctx, "mission.failed", { reason: `решение шага: ${msg}` });
@@ -412,6 +719,45 @@ export class ExecutionEngine {
           error: msg,
           data: { missionId: ctx.missionId, steps: history },
         };
+      }
+
+      /* ── Пересборка плана ─────────────────────────────────────────
+       *
+       * План строился ОДИН РАЗ, до первого шага — то есть до того, как
+       * хоть что-то стало известно о проекте. Реальная работа так не
+       * идёт: третий шаг регулярно выясняет, что план был неверен. А план
+       * при этом продолжал показываться модели в каждом запросе и тянуть
+       * её обратно к неверному маршруту.
+       *
+       * Два повода пересобрать:
+       *   1. модель сказала об этом сама (replan);
+       *   2. план кончился, а работа — нет: ориентира больше нет, а до
+       *      потолка шагов ещё далеко.
+       *
+       * Выполненные шаги не трогаются: это сделанная работа, и переписать
+       * её задним числом значит потерять след того, что происходило.
+       */
+      const exhausted = planExhausted(plan);
+      if ((decision.replan || exhausted) && revisions < MAX_REVISIONS && plan.length) {
+        revisions++;
+        const why = decision.replan
+          ? (decision.reason ?? "модель сочла план негодным")
+          : "план исчерпан, а задача не закрыта";
+
+        const titles = await this.replanTitles(goal, toolList, history, plan, maxIterations - i, ctx);
+        if (titles.length) {
+          plan = await revisePlan(this.env, ctx.missionId, plan, titles, why);
+          await this.note(ctx, "plan.revised", { reason: why, steps: titles.length, iteration: i });
+        } else {
+          // Новый план не получился — продолжаем со старым. Остаться
+          // совсем без плана хуже: неверный хотя бы задаёт направление.
+          await this.note(ctx, "plan.revise_skipped", { reason: "модель не вернула новых шагов" });
+        }
+
+        // Ревизия — это шаг, но не шаг РАБОТЫ. Если модель просила
+        // пересборку, у неё нет инструмента для выполнения, и идти ниже
+        // с пустым decision нельзя.
+        if (decision.replan) continue;
       }
 
       if (decision.done || !decision.tool) {
@@ -428,9 +774,57 @@ export class ExecutionEngine {
          * сошёлся бы — а незакрытую задачу нельзя выдавать за
          * закрытую.
          */
-        const verdict = await checkResult(this.env, goal, history, ctx.preferredModel);
+        /* ── ПРОВЕРКА ФАКТОМ, А НЕ НА СЛОВО ──────────────────────
+         *
+         * До этого прогон тестов был ДОБРОВОЛЬНЫМ: если модель ни разу
+         * не позвала sandbox_test, в истории не оказывалось объективных
+         * данных, и решение принималось по мнению другой модели о
+         * пересказе работы. То есть агент, ни разу не запустивший
+         * ничего, проходил проверку ровно так же, как агент, добившийся
+         * зелёных тестов.
+         *
+         * Теперь тесты гоняет сам цикл, перед тем как принять «готово».
+         * Отсутствие тестов в проекте — не препятствие: прогонять нечего,
+         * работаем как раньше. Недоступность песочницы — тоже: без неё
+         * проверка возвращается к прежнему уровню, а не блокирует
+         * сделанную работу. */
+        if (detectBackend(this.env) === "container" && ctx.projectId) {
+          try {
+            const verify = await this.runTestsInContainer(ctx.projectId);
+            if (verify) {
+              history.push({
+                tool: "sandbox_test",
+                input: {},
+                ok: verify.ok,
+                result: this.renderResult(verify),
+              });
+              await this.note(ctx, verify.ok ? "tests.verified" : "tests.failed", {
+                reason: `${verify.passed} прошло, ${verify.failed} упало (${verify.command})`,
+                iteration: i,
+              });
+            }
+          } catch (err) {
+            // Прогон не состоялся — говорим об этом, но не роняем работу:
+            // «проверить не удалось» не то же самое, что «сделано плохо».
+            await this.note(ctx, "tests.unavailable", {
+              reason: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
+        const changes = ctx.projectId
+          ? diffWorkspace(filesBefore, await this.readWorkspace(ctx.projectId).catch(() => filesBefore))
+          : [];
+
+        const verdict = await checkResult(this.env, goal, history, ctx.preferredModel, renderChanges(changes), ctx.usage);
         await this.recordCheck(ctx.missionId, rejections + 1, verdict.passed, verdict.reason);
-        await this.note(ctx, verdict.passed ? "check.passed" : "check.rejected", {
+        /* Три исхода, а не два.
+         *
+         * Раньше «проверено, всё хорошо», «проверяющий не ответил» и
+         * «проверка упала» давали одно и то же событие check.passed.
+         * Различие жило в тексте reason — то есть нигде, потому что ни
+         * одна ветка кода его не читала. Событие называет исход прямо. */
+        await this.note(ctx, verdict.passed ? (verdict.verified ? "check.passed" : "check.unverified") : "check.rejected", {
           reason: verdict.reason,
           iteration: i,
         });
@@ -488,12 +882,63 @@ export class ExecutionEngine {
         );
         if (comparison.regressed) {
           await this.note(ctx, "tests.regressed", { reason: comparison.summary });
+
+          /* ── Откат и вторая попытка ──────────────────────────────────
+           *
+           * Раньше здесь был вопрос человеку: «откатить или продолжить
+           * исправление?» — и миссия замирала. Для работы с телефона это
+           * худший из возможных исходов: агент трудился десять минут,
+           * сломал тесты и встал ждать, пока ты дойдёшь до экрана. К тому
+           * моменту контекст миссии уже не восстановить.
+           *
+           * Правильный ответ на этот вопрос почти всегда один и тот же:
+           * откатить. Сломанные тесты — не повод сохранять изменения,
+           * которые их сломали. Спрашивать имеет смысл, только когда
+           * ВТОРАЯ попытка кончилась тем же: значит, дело не в подходе, а
+           * в понимании задачи, и тут человек действительно нужен.
+           *
+           * Одна попытка, не больше. Цикл «сломал — откатил — сломал
+           * иначе» способен сжечь весь бюджет шагов, и каждый его виток
+           * выглядит как прогресс.
+           */
+          const canRetry = regressions === 0 && snapshotKey && ctx.projectId;
+          if (canRetry) {
+            regressions++;
+            const undone = await rollbackWorkspace(this.env, ctx.projectId, snapshotKey);
+            await this.note(ctx, "tests.rolled_back", {
+              reason: undone
+                ? `${comparison.summary} Откатено: восстановлено ${undone.restored}, удалено новых ${undone.removed}. Пробую другой подход.`
+                : `${comparison.summary} Откат не удался.`,
+              iteration: i,
+            });
+
+            /* Запись в историю — не для отчёта, а чтобы модель УЗНАЛА об
+             * откате. Без неё следующий шаг строится на убеждении, что
+             * правки на месте, и модель продолжит достраивать поверх
+             * того, чего больше нет. */
+            history.push({
+              tool: "rollback",
+              input: {},
+              ok: false,
+              result:
+                `Твои изменения СЛОМАЛИ тесты (${comparison.summary}) и были отменены. ` +
+                `Файлы вернулись в исходное состояние — того, что ты написал, больше нет. ` +
+                `Подход оказался неверным: не повторяй его, а разберись, почему он ломает тесты.`,
+            });
+
+            // Снимок отдавать нельзя: он всё ещё описывает исходное
+            // состояние, и вторая неудача должна откатывать к нему же.
+            continue;
+          }
+
           return {
             status: "needs_input",
             agent: "execution-engine",
-            summary: comparison.summary,
+            summary: regressions
+              ? `${comparison.summary} Первый подход уже откатывался — дело не в нём.`
+              : comparison.summary,
             questions: ["Откатить изменения или продолжить исправление?"],
-            data: { missionId: ctx.missionId, steps: history, iterations: i, plan, comparison },
+            data: { missionId: ctx.missionId, steps: history, iterations: i, plan, comparison, regressions },
           };
         }
 
@@ -507,21 +952,38 @@ export class ExecutionEngine {
          * это» бесполезен — он и так есть в журнале событий.
          *
          * Сбой записи миссию не роняет: работа уже сделана. */
-        await this.reflect(ctx, goal, history);
+        await this.reflect(ctx, goal, history, changes.map((c) => c.path), regressions > 0);
+
+        /* Расход миссии — в результат и в карту.
+         *
+         * Не ради денег: модели бесплатны. Ради измеримости. Измеритель
+         * качества отвечает «сколько задач решено» и молчит о том, какой
+         * ценой, — а решение 60% за двадцать вызовов хуже решения 55% за
+         * шесть. Без этого числа любая правка, добавляющая вызовы, будет
+         * выглядеть выигрышной, пока она хоть немного поднимает долю. */
+        const usage = ctx.usage?.totals();
+        if (usage) await this.note(ctx, "usage.summary", { reason: renderUsage(usage) });
 
         await this.note(ctx, "mission.completed", { steps: history.length, summary: decision.summary });
         return {
           status: "done",
           agent: "execution-engine",
-          summary: decision.summary ?? `Миссия завершена за ${history.length} шаг(ов).`,
+          summary:
+            (decision.summary ?? `Миссия завершена за ${history.length} шаг(ов).`) +
+            // Приписка ровно там, где человек читает итог. Без неё
+            // «сделано» и «сделано, но проверить не удалось» выглядят
+            // одинаково — а это разные вещи.
+            (verdict.verified ? "" : ` (проверка не состоялась: ${verdict.reason})`),
           data: {
             missionId: ctx.missionId,
             steps: history,
             iterations: i,
             plan,
             check: verdict,
+            verified: verdict.verified,
             tests: comparison.summary,
             progress: planProgress(plan),
+            usage,
           },
         };
       }
@@ -624,6 +1086,72 @@ export class ExecutionEngine {
   }
 
   /** Один запрос к модели: что делать дальше. */
+  /**
+   * Прогон тестов в контейнере на файлах рабочей области.
+   *
+   * Возвращает null, когда прогонять нечем: тестов в проекте нет. Это НЕ
+   * ошибка и не провал — придумать команду, которой нет, значит получить
+   * «тесты упали» там, где тестов не существует, и заблокировать работу
+   * навсегда.
+   *
+   * Заливка перед каждым прогоном обязательна: замер на устаревшем
+   * содержимом даёт ложный результат, то есть ровно то, ради чего
+   * проверка фактом и делается, перестаёт работать.
+   */
+  /** Содержимое рабочей области целиком. Используется для сравнения «до и
+   *  после»: список путей без содержимого не показал бы, что файл
+   *  переписали, — а это и есть главный интересующий случай. */
+  private async readWorkspace(projectId: string): Promise<WorkspaceFile[]> {
+    const listed = await listFiles(this.env, projectId, 400);
+    const out: WorkspaceFile[] = [];
+    for (const entry of listed) {
+      const f = await readFile(this.env, projectId, entry.path);
+      out.push({ path: entry.path, content: f?.content ?? "" });
+    }
+    return out;
+  }
+
+  private async runTestsInContainer(projectId: string) {
+    const listed = await listFiles(this.env, projectId, 400);
+    const files: WorkspaceFile[] = [];
+    for (const entry of listed) {
+      // Для выбора команды нужны только имена и package.json — читать
+      // содержимое всех файлов ради этого расточительно.
+      if (entry.path === "package.json" || entry.path.endsWith("/package.json")) {
+        const f = await readFile(this.env, projectId, entry.path);
+        files.push({ path: entry.path, content: f?.content ?? "" });
+      } else {
+        files.push({ path: entry.path, content: "" });
+      }
+    }
+
+    const plan = detectTestCommand(files);
+    if (!plan.command) {
+      log("info", "tests.nothing_to_run", { projectId, reason: plan.reason });
+      return null;
+    }
+
+    await syncWorkspaceToSandbox(this.env, projectId);
+    const res = await runInContainer(this.env, `cd ${SANDBOX_WORKDIR} && ${plan.command}`, {
+      sandboxName: projectId,
+    });
+
+    /* Код возврата — последнее слово.
+     *
+     * Разбор вывода нужен ради чисел, но решает не он: прогонщик может
+     * напечатать что угодно ободряющее и выйти с ненулевым кодом. Именно
+     * этим обманывается модель, читающая вывод глазами. */
+    const parsed = parseTestOutput(res.output, res.exitCode);
+    const ok = res.exitCode === 0 && parsed.failed === 0;
+    return {
+      ...parsed,
+      ok,
+      command: plan.command,
+      exitCode: res.exitCode,
+      output: truncateOutput(res.output, 20, 60),
+    };
+  }
+
   private async decideNextStep(
     goal: string,
     toolList: string,
@@ -632,6 +1160,9 @@ export class ExecutionEngine {
     maxIterations: number,
     ctx: ExecutionContext,
     plan: PlanStep[] = [],
+    repoMap = "",
+    scoutReport = "",
+    memoryBlock = "",
   ): Promise<StepDecision> {
     const historyBlock = renderHistory(history);
 
@@ -645,6 +1176,12 @@ export class ExecutionEngine {
             role: "user",
             content:
               `ЗАДАЧА: ${goal}\n\n` +
+              // Карта идёт ПЕРЕД историей: она не меняется по ходу миссии,
+              // и её место — в стабильной части запроса, где её не вытеснит
+              // растущий список сделанного.
+              (memoryBlock ? `${memoryBlock}\n\n` : "") +
+              (repoMap ? `${repoMap}\n\n` : "") +
+              (scoutReport ? `${scoutReport}\n\n` : "") +
               `ДОСТУПНЫЕ ИНСТРУМЕНТЫ:\n${toolList}\n\n` +
               `УЖЕ СДЕЛАНО:\n${historyBlock}\n\n` +
               // План идёт В КОНЕЦ, а не в начало. К концу длинного запроса
@@ -657,6 +1194,7 @@ export class ExecutionEngine {
       },
       {
         preferredModel: ctx.preferredModel,
+          ledger: ctx.usage,
         // Ответ без разбираемого JSON бесполезен: из него нельзя достать ни
         // инструмент, ни признак завершения. Проверка структурная и
         // бесплатная — маршрутизатор попробует другую модель, а не отдаст
@@ -718,15 +1256,74 @@ export class ExecutionEngine {
    * выполнить, хуже отсутствия плана — он уводит исполнителя в тупик и
    * тратит шаги на попытки сделать невозможное.
    */
+  /**
+   * Новые шаги взамен негодных.
+   *
+   * Отличается от buildPlan тем, что видит УЖЕ СДЕЛАННОЕ. Планировать
+   * заново с чистого листа бессмысленно: модель повторила бы шаги,
+   * которые уже выполнены, и миссия пошла бы по кругу — ровно то, от
+   * чего пересборка должна спасать.
+   *
+   * Потолок шагов — остаток от maxIterations, а не исходное число. План
+   * из восьми шагов при трёх оставшихся — это обещание, которое нечем
+   * выполнить, и модель будет идти по нему, пока не упрётся в потолок.
+   */
+  private async replanTitles(
+    goal: string,
+    toolList: string,
+    history: StepRecord[],
+    plan: PlanStep[],
+    remaining: number,
+    ctx: ExecutionContext,
+  ): Promise<string[]> {
+    if (remaining <= 1) return [];
+
+    try {
+      const routed = await runModel<{ response?: string }>(
+        this.env,
+        "plan",
+        {
+          messages: [
+            {
+              role: "user",
+              content:
+                `Первоначальный план оказался негодным. Составь план ОСТАВШЕЙСЯ работы.\n\n` +
+                `ЗАДАЧА: ${goal}\n\n` +
+                `ПРЕЖНИЙ ПЛАН:\n${renderPlan(plan)}\n\n` +
+                `УЖЕ СДЕЛАНО:\n${renderHistory(history)}\n\n` +
+                `ДОСТУПНЫЕ ИНСТРУМЕНТЫ:\n${toolList}\n\n` +
+                `Не повторяй уже сделанное. Шагов не больше ${Math.min(remaining, 6)}. ` +
+                `Каждый шаг выполним перечисленными инструментами.\n` +
+                `Ответь строго JSON-массивом строк: ["шаг", "шаг"]`,
+            },
+          ],
+        },
+        { preferredModel: ctx.preferredModel, ledger: ctx.usage },
+      );
+      return parsePlan(extractText(routed.output));
+    } catch (err) {
+      // Не вышло — работаем по старому плану. Пересборка вспомогательна,
+      // ронять из-за неё миссию незачем.
+      log("warn", "plan.replan_failed", {
+        missionId: ctx.missionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
+  }
+
   private async buildPlan(
     goal: string,
     toolList: string,
     maxIterations: number,
     ctx: ExecutionContext,
+    repoMap = "",
+    scoutReport = "",
+    memoryBlock = "",
   ): Promise<PlanStep[]> {
     const routed = await runModel<{ response?: string }>(
       this.env,
-      "chat",
+      "plan",
       {
         messages: [
           {
@@ -734,6 +1331,11 @@ export class ExecutionEngine {
             content:
               `Разбей задачу на последовательные шаги.\n\n` +
               `ЗАДАЧА: ${goal}\n\n` +
+              // Карта и выводы разведки — чтобы план опирался на то, что в
+              // проекте есть, а не на догадки о том, что там могло бы быть.
+              (memoryBlock ? `${memoryBlock}\n\n` : "") +
+              (repoMap ? `${repoMap}\n\n` : "") +
+              (scoutReport ? `${scoutReport}\n\n` : "") +
               `ДОСТУПНЫЕ ИНСТРУМЕНТЫ:\n${toolList}\n\n` +
               `Шагов должно быть не больше ${Math.min(maxIterations, 8)}. ` +
               `Каждый шаг — то, что выполнимо ПЕРЕЧИСЛЕННЫМИ выше инструментами. ` +
@@ -742,7 +1344,7 @@ export class ExecutionEngine {
           },
         ],
       },
-      { preferredModel: ctx.preferredModel },
+      { preferredModel: ctx.preferredModel, ledger: ctx.usage },
     );
 
     const titles = parsePlan(extractText(routed.output));
@@ -767,24 +1369,41 @@ export class ExecutionEngine {
    * Категория "known_issue" для миссий с ошибками по пути, иначе
    * "architecture_decision": то, ЧТО помогло, полезнее того, что делали.
    */
+  /**
+   * Что из миссии переживёт её саму.
+   *
+   * Раньше здесь писалась одна строка: «Решено за N шагов через
+   * read_file, write_file. По пути мешало: <первая попавшаяся ошибка>».
+   * Такой факт бесполезен — он перечисляет очевидное и цитирует ошибку
+   * без причины и без места. Вспомнив его через неделю, модель узнавала,
+   * что когда-то что-то не получилось, и становилась осторожнее там, где
+   * не надо.
+   *
+   * Правила отбора вынесены в core/reflection.ts и проверяются отдельно:
+   * решение «что достойно памяти» важнее, чем механика записи, и не
+   * должно было прятаться внутри цикла.
+   */
   private async reflect(
     ctx: ExecutionContext,
     goal: string,
     history: { tool: string; ok: boolean; result: string }[],
+    changedFiles: string[],
+    rolledBack: boolean,
   ): Promise<void> {
-    if (!ctx.projectId || history.length < 2) return;
+    if (!ctx.projectId) return;
 
-    const failures = history.filter((h) => !h.ok);
-    const tools = [...new Set(history.filter((h) => h.ok).map((h) => h.tool))];
+    const facts = buildReflection({ goal, history, changedFiles, rolledBack });
+    // Пустой список — нормальный ответ: миссия, ничего не изменившая и не
+    // встретившая внятной ошибки, ничего и не выяснила. Записать про неё
+    // что-нибудь ради заполнения памяти значит разбавить то немногое, что
+    // в ней есть смысла.
+    if (!facts.length) return;
 
     try {
-      await rememberFact(this.env, ctx.projectId, {
-        category: failures.length ? "known_issue" : "architecture_decision",
-        key: goal.slice(0, 80),
-        value: failures.length
-          ? `Решено за ${history.length} шаг(ов) через ${tools.join(", ")}. По пути мешало: ${failures[0].result.slice(0, 200)}`
-          : `Решено за ${history.length} шаг(ов) через ${tools.join(", ")}.`,
-      });
+      for (const fact of facts) {
+        await rememberFact(this.env, ctx.projectId, fact);
+      }
+      await this.note(ctx, "memory.saved", { reason: `записей: ${facts.length}` });
     } catch (err) {
       log("warn", "reflect.failed", {
         missionId: ctx.missionId,
@@ -974,8 +1593,9 @@ export function parseDecision(text: string): StepDecision | null {
       const v = JSON.parse(s);
       if (!v || typeof v !== "object") return null;
       const d = v as StepDecision;
-      // Пустой объект — не решение: ни инструмента, ни признака конца.
-      if (!d.tool && d.done !== true) return null;
+      // Пустой объект — не решение: ни инструмента, ни признака конца,
+      // ни просьбы пересобрать план.
+      if (!d.tool && d.done !== true && d.replan !== true) return null;
       return d;
     } catch {
       return null;

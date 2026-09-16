@@ -171,3 +171,85 @@ export function planProgress(steps: PlanStep[]): { done: number; total: number }
   };
 }
 
+
+
+/** Сколько раз за миссию разрешено пересобрать план.
+ *
+ *  Ревизия стоит вызова модели и шага. Без потолка цикл легко сползает в
+ *  «планирую, как планировать»: каждая неудача порождает новый план, новый
+ *  план порождает новую неудачу, и миссия расходует потолок шагов, не
+ *  тронув ни одного файла. Два — это «ошибся в начале» и «ошибся ещё раз
+ *  уже зная больше»; третий раз означает, что дело не в плане. */
+export const MAX_REVISIONS = 2;
+
+/**
+ * Пересборка оставшейся части плана.
+ *
+ * ВЫПОЛНЕННОЕ НЕ ТРОГАЕТСЯ. Шаги со статусом done остаются как есть: это
+ * сделанная работа, и переписывать её задним числом значит терять след
+ * того, что происходило. Заменяются только pending и doing — то, что ещё
+ * предстоит и что оказалось неверным.
+ *
+ * Отменённые помечаются skipped с причиной, а не удаляются. Через месяц
+ * вопрос «почему миссия пошла не туда» решается по журналу, и исчезнувший
+ * шаг делает его неотвечаемым.
+ */
+export async function revisePlan(
+  env: Env,
+  missionId: string,
+  steps: PlanStep[],
+  newTitles: string[],
+  reason: string,
+): Promise<PlanStep[]> {
+  const kept = steps.filter((s) => s.status === "done");
+  const dropped = steps.filter((s) => s.status !== "done");
+
+  const titles = newTitles.map((t) => t.trim()).filter(Boolean).slice(0, MAX_STEPS - kept.length);
+  if (!titles.length) {
+    // Пустая замена оставила бы миссию совсем без плана — хуже, чем с
+    // неверным: неверный хотя бы задаёт направление.
+    return steps;
+  }
+
+  const fresh: PlanStep[] = titles.map((title, i) => ({
+    id: crypto.randomUUID(),
+    position: kept.length + i,
+    title: title.slice(0, 300),
+    status: i === 0 ? "doing" : "pending",
+  }));
+
+  try {
+    for (const s of dropped) {
+      s.status = "skipped";
+      s.note = `отменён при пересборке плана: ${reason}`.slice(0, 500);
+      await env.AZRAIL_D1.prepare(
+        `UPDATE mission_steps SET status = ?, note = ?, updated_at = ? WHERE id = ?`,
+      )
+        .bind(s.status, s.note, new Date().toISOString(), s.id)
+        .run();
+    }
+    for (const s of fresh) {
+      await env.AZRAIL_D1.prepare(
+        `INSERT INTO mission_steps (id, mission_id, position, title, status) VALUES (?, ?, ?, ?, ?)`,
+      )
+        .bind(s.id, missionId, s.position, s.title, s.status)
+        .run();
+    }
+  } catch (err) {
+    // План — вспомогательная вещь. Не сохранился в базе — работаем с тем,
+    // что в памяти, а не роняем миссию.
+    log("error", "plan.revise_failed", {
+      missionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return [...kept, ...dropped, ...fresh];
+}
+
+/** Остались ли невыполненные шаги. Исчерпанный план — сигнал к ревизии:
+ *  работа продолжается, а ориентира больше нет. */
+export function planExhausted(steps: PlanStep[]): boolean {
+  if (!steps.length) return false;
+  return !steps.some((s) => s.status === "pending" || s.status === "doing");
+}

@@ -1310,7 +1310,12 @@ describe("Цикл дотягивается до агентов", () => {
   });
 
   it("мост прокинут из роута, где есть ссылка на Durable Object", () => {
-    expect(idx).toContain("invokeCapability: (capability, req)");
+    // Мост переехал из роута в Оркестратор вместе с самой миссией: цикл
+    // теперь исполняется ВНУТРИ Durable Object, и межобъектного вызова
+    // (с его "Cannot perform I/O on behalf of a different Durable
+    // Object") здесь больше не возникает в принципе. Проверка осталась
+    // той же по сути: движок зовёт агентов не сам, а через мост.
+    expect(orch).toContain("invokeCapability: (capability, request) => this.runCapability");
   });
 
   it("без моста инструмент отказывает явно, а не падает невнятно", () => {
@@ -1684,11 +1689,15 @@ describe("Сбои журнала не отменяют сделанную ра�
     // первая версия ссылалась на "return json({ success: true, missionId",
     // и когда в ответ добавили поле budget, срез поехал до конца файла и
     // поймал чужие обработчики ошибок.
-    const block = idx.slice(
-      idx.indexOf("const finishedAt = new Date()"),
-      idx.indexOf("// Бюджет и остаток уходят в ответ"),
-    );
-    expect(block).toContain("mission.status_write_failed");
+    // Запись финального статуса переехала в lib/mission-state.ts вместе с
+    // переносом миссии в фон. Требование не изменилось: упасть на UPDATE
+    // после выполненной работы нельзя.
+    const state = src("src/lib/mission-state.ts");
+    const block = state.slice(state.indexOf("export async function finishMission"));
+    expect(block).toContain("mission.finish_failed");
+    // И запасной путь на случай базы без колонки result_json: миграция
+    // применяется отдельно, а миссия не должна зависнуть из-за этого.
+    expect(block).toContain("mission.finish_without_result_column");
     expect(block, "после работы возврата ошибки быть не должно").not.toContain("return json({ error");
   });
 
@@ -1846,7 +1855,33 @@ describe("Проверка перед «готово» и план миссии"
   it("непонятный вердикт не блокирует уже сделанную работу", () => {
     // Проверка — надстройка. Глючащий разбор не должен становиться
     // стеной, не выпускающей результат наружу.
-    expect(checker).toContain("passed: true, reason: \"Проверяющий не ответил");
+    expect(checker).toContain('passed: true, verified: false, reason: "Проверяющий не ответил');
+  });
+
+  it("непройденная проверка не выдаётся за пройденную", () => {
+    // ЗДЕСЬ БЫЛА ДЫРА. Три разных исхода — «проверено, всё хорошо»,
+    // «проверяющий ответил невнятно» и «проверка упала» — возвращали
+    // одинаковое passed: true. Различие жило только в тексте reason, то
+    // есть нигде: ни одна ветка кода его не читала, и миссия отчитывалась
+    // «готово» одинаково во всех трёх случаях.
+    //
+    // passed отвечает на вопрос «пропускать ли дальше» (да, пропускать:
+    // терять сделанную работу из-за недоступной надстройки нельзя),
+    // verified — на вопрос «состоялась ли проверка». Это разные вопросы.
+    const bare = checker.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/.*$/gm, " ");
+    for (const site of bare.split("return {").slice(1)) {
+      const head = site.slice(0, 260);
+      if (!head.includes("passed:")) continue;
+      expect(head, `вердикт без verified: ${head.slice(0, 80)}`).toContain("verified:");
+    }
+  });
+
+  it("неподтверждённый исход доходит до отчёта миссии", () => {
+    // Иначе факт повторил бы судьбу reason — существовал бы в типе и не
+    // попадал бы никуда.
+    expect(engine).toContain('"check.unverified"');
+    expect(engine).toContain("verdict.verified ?");
+    expect(engine).toContain("verified: verdict.verified");
   });
 
   it("сбой проверки не роняет миссию", () => {
@@ -1889,7 +1924,11 @@ describe("Проверка перед «готово» и план миссии"
   });
 
   it("сбой планирования не останавливает миссию", () => {
-    const block = engine.slice(engine.indexOf("let plan: PlanStep[] = []"), engine.indexOf("let rejections"));
+    // Построение плана переехало ниже — после карты проекта и разведки,
+    // чтобы планировать по фактам, а не вслепую. Срез привязан к самому
+    // блоку, а не к соседу, который с тех пор оказался выше.
+    const from = engine.indexOf("let plan: PlanStep[] = []");
+    const block = engine.slice(from, engine.indexOf("let rejections", from));
     expect(block).toContain("catch");
     expect(block).toContain("plan.build_failed");
   });
@@ -1920,9 +1959,12 @@ describe("Защита от неконтролируемого счёта", () =
     // Узнать о перерасходе после того, как записи сделаны, бесполезно.
     const mission = idx.slice(idx.indexOf('url.pathname === "/api/mission" && request.method === "POST"'));
     const chargeIdx = mission.indexOf("chargeWrites(");
-    const engineIdx = mission.indexOf("new ExecutionEngine");
+    // Движок больше не создаётся в роуте: миссия уходит в фон через
+    // startMission(). Точка отсчёта сместилась, требование — нет.
+    const engineIdx = mission.indexOf(".startMission(");
     expect(chargeIdx).toBeGreaterThan(-1);
-    expect(chargeIdx, "списание должно идти до запуска движка").toBeLessThan(engineIdx);
+    expect(engineIdx, "роут должен ставить миссию в фон").toBeGreaterThan(-1);
+    expect(chargeIdx, "списание должно идти до постановки миссии в работу").toBeLessThan(engineIdx);
   });
 
   it("проверяется полная стоимость, а не наличие одного места", () => {
@@ -2275,7 +2317,7 @@ describe("Опыт переживает миссию, реестр не дубл
     // который выглядит рабочим. Именно так это и обнаружилось.
     const start = engine.indexOf("if (decision.done || !decision.tool)");
     const block = engine.slice(start, engine.indexOf('status: "done"', start));
-    expect(block, "вызов reflect потерян").toContain("this.reflect(ctx, goal, history)");
+    expect(block, "вызов reflect потерян").toContain("this.reflect(ctx, goal, history,");
   });
 
   it("рефлексия записывает ОДИН факт, а не пересказ работы", () => {
@@ -2292,10 +2334,17 @@ describe("Опыт переживает миссию, реестр не дубл
     expect(fn.slice(0, 1600)).toContain("catch");
   });
 
-  it("рефлексия пропускает совсем короткие миссии", () => {
-    // Из одного шага урока не выйдет — только шум в памяти.
+  it("рефлексия пропускает миссии, из которых нечего вынести", () => {
+    // Раньше отсев шёл по длине: миссию короче двух шагов не записывали.
+    // Длина — плохой признак: правка одной строки в нужном файле стоит
+    // запоминания, а десять шагов чтения без единой правки — нет.
+    //
+    // Теперь решает содержание (core/reflection.ts): факт пишется, только
+    // если в нём есть МЕСТО (изменённые файлы) или ПРИЧИНА (внятная
+    // ошибка). Пустой список фактов — нормальный и частый ответ.
     const fn = engine.slice(engine.indexOf("private async reflect("));
-    expect(fn.slice(0, 800)).toContain("history.length < 2");
+    expect(fn.slice(0, 1600)).toContain("buildReflection(");
+    expect(fn.slice(0, 1600)).toContain("if (!facts.length) return;");
   });
 
   it("аудит проекта видит прошлые решения", () => {
@@ -2346,9 +2395,15 @@ describe("Данные не копятся впустую", () => {
 
   it("история миссии отдаёт трассировку целиком", () => {
     const idx = src("src/index.ts");
-    const block = idx.slice(idx.indexOf("Полная трассировка прогона"));
+    // Граница — следующий роут, а не magic number: первая версия резала
+    // окно на 2200 символах, и добавленный в обработчик комментарий
+    // выталкивал последнюю проверку за край. Тест падал на изменении,
+    // которое ничего не ломало.
+    const from = idx.indexOf("Полная трассировка прогона");
+    const to = idx.indexOf('url.pathname === "/api/conversations"', from);
+    const block = idx.slice(from, to);
     for (const part of ["mission_steps", "tool_calls", "mission_checks", "approvals"]) {
-      expect(block.slice(0, 2200), `${part} не отдаётся`).toContain(part);
+      expect(block, `${part} не отдаётся`).toContain(part);
     }
   });
 
@@ -3080,5 +3135,46 @@ describe("Каждый экран зарегистрирован", () => {
     // восемь из двадцати одного.
     expect(html).toContain("недоступен");
     expect(html).toContain("srow' + (live ? '' : ' off')");
+  });
+});
+
+describe("Телефон: ввод и меню", () => {
+  const html = src("public/index.html");
+  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  const rule = (sel: string) => {
+    const i = css.indexOf(sel + " {");
+    return i === -1 ? "" : css.slice(i, css.indexOf("}", i));
+  };
+
+  it("поле ввода занимает всю строку", () => {
+    // Раньше оно делило строку с тремя кнопками и на телефоне сжималось
+    // до узкой щели: главное действие выглядело как второстепенное.
+    expect(rule(".ask")).toMatch(/grid-template-columns:\s*1fr/);
+    expect(html, "кнопки не вынесены под поле").toContain('class="ask-tools"');
+  });
+
+  it("кнопки под полем, отправка справа", () => {
+    expect(rule(".ask-tools .go")).toMatch(/margin-left:\s*auto/);
+  });
+
+  it("меню выезжает, а не пропадает", () => {
+    // display:none нельзя анимировать в принципе: полоса мгновенно
+    // исчезала и мгновенно возникала.
+    expect(css, "вернулся display:none").not.toMatch(/nav-closed \.sidebar \{ display: none/);
+    expect(css).toMatch(/nav-closed \.sidebar[\s\S]{0,140}translateX\(-100%\)/);
+  });
+
+  it("скрытое меню недоступно с клавиатуры", () => {
+    // Иначе табом можно провалиться в то, чего не видно.
+    expect(css).toMatch(/nav-closed \.sidebar[\s\S]{0,140}visibility: hidden/);
+  });
+
+  it("движение не гасится наглухо", () => {
+    // У владельца системные анимации выключены: правило
+    // prefers-reduced-motion навсегда заморозило бы меню без способа
+    // его оживить. Движение включается классом, и выбор человека имеет
+    // приоритет над настройкой ОС.
+    expect(css, "меню замрёт у тех, кто отключил анимации в системе")
+      .not.toMatch(/@media \(prefers-reduced-motion[\s\S]{0,200}\.sidebar/);
   });
 });

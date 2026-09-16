@@ -57,6 +57,10 @@ export const SANDBOX_LIMITS = {
   /** Сколько строк оставлять с каждого конца при обрезке. */
   KEEP_HEAD_LINES: 100 as number,
   KEEP_TAIL_LINES: 100 as number,
+  /** Потолок на ОДИН файл при заливке рабочей области в контейнер.
+   *  Содержимое проходит через память воркера, а она кончается тихо —
+   *  без ошибки, которую можно прочитать. */
+  MAX_FILE_BYTES: 1024 * 1024,
 } as const;
 
 /* ── Политика сети ───────────────────────────────────────────────────
@@ -169,6 +173,40 @@ const RUNNERS: RunnerPattern[] = [
 
 export function parseTestOutput(raw: string, exitCode?: number): TestResult {
   const text = raw ?? "";
+
+  /* ── node:test (TAP) ──────────────────────────────────────────────
+   *
+   * НАЙДЕНО ПРИ ПОСТРОЕНИИ ИЗМЕРИТЕЛЯ, и это была дыра в самом дорогом
+   * месте. Встроенный прогонщик Node печатает сводку отдельными
+   * строками:
+   *
+   *     # pass 2
+   *     # fail 1
+   *
+   * Ни один из шаблонов ниже её не узнавал — они написаны под vitest,
+   * jest и pytest, где сводка в одну строку. Итог: прогон через
+   * `node --test` возвращал total = 0, а проверяющий трактует это как
+   * «тестов не было» и уходит спрашивать модель. То есть самый простой
+   * способ прогнать тесты — без установки зависимостей, тот, на котором
+   * построен весь набор задач измерителя, — молча не считался.
+   *
+   * Обрабатывается ДО общего списка: сводка Node содержит слово «pass»
+   * и могла бы случайно совпасть с чужим шаблоном, дав неверные числа.
+   */
+  const nodePass = /^# pass (\d+)/m.exec(text);
+  const nodeFail = /^# fail (\d+)/m.exec(text);
+  if (nodePass && nodeFail) {
+    const passed = Number(nodePass[1]);
+    const failed = Number(nodeFail[1]);
+    return {
+      passed,
+      failed,
+      total: passed + failed,
+      ok: failed === 0 && passed > 0,
+      runner: "node:test",
+      failures: extractFailures(text),
+    };
+  }
 
   for (const runner of RUNNERS) {
     const m = text.match(runner.re);

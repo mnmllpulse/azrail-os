@@ -108,7 +108,13 @@ CREATE TABLE IF NOT EXISTS missions (
   -- Момент завершения. Колонки не было, а код её записывал: каждая миссия
   -- падала бы на UPDATE с "no such column". Поймано сверкой SQL со схемой,
   -- а не тестами — tsc и vitest про имена колонок ничего не знают.
-  finished_at TEXT
+  finished_at TEXT,
+  -- Итог миссии (TaskResult в JSON). Появился вместе с переносом миссии в
+  -- фон: POST возвращается до начала работы, и результат больше некуда
+  -- положить в ответ. На УЖЕ РАЗВЁРНУТОЙ базе колонки нет — применить
+  -- migrations/002-mission-async.sql. Код без неё не падает, но отчёт
+  -- остаётся без итогового текста.
+  result_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS mission_events (
@@ -144,6 +150,8 @@ CREATE TABLE IF NOT EXISTS approvals (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_missions_project ON missions(project_id, updated_at);
+-- По нему ходит сборщик зависших миссий (крон, lib/mission-state.ts).
+CREATE INDEX IF NOT EXISTS idx_missions_status_updated ON missions(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_mission_events ON mission_events(mission_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_mission ON tool_calls(mission_id, started_at);
 
@@ -194,3 +202,42 @@ CREATE TABLE IF NOT EXISTS mission_checks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mission_checks_mission ON mission_checks(mission_id);
+
+
+-- ── Измеритель качества (миграция 003) ────────────────────────────────
+-- Одно число ничего не значит, пока не с чем сравнить: смысл измерителя
+-- целиком в сравнении сегодняшнего прогона со вчерашним.
+CREATE TABLE IF NOT EXISTS bench_runs (
+  id TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  score INTEGER NOT NULL DEFAULT 0,
+  measured INTEGER NOT NULL DEFAULT 0,
+  solved INTEGER NOT NULL DEFAULT 0,
+  failed INTEGER NOT NULL DEFAULT 0,
+  regressed INTEGER NOT NULL DEFAULT 0,
+  invalid INTEGER NOT NULL DEFAULT 0,
+  unmeasured INTEGER NOT NULL DEFAULT 0,
+  median_ms INTEGER NOT NULL DEFAULT 0,
+  note TEXT
+);
+
+CREATE TABLE IF NOT EXISTS bench_results (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  case_id TEXT NOT NULL,
+  difficulty TEXT,
+  verdict TEXT NOT NULL,
+  before_ok INTEGER,
+  after_ok INTEGER,
+  before_passed INTEGER,
+  after_passed INTEGER,
+  mission_status TEXT,
+  mission_id TEXT,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  FOREIGN KEY (run_id) REFERENCES bench_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bench_results_run ON bench_results(run_id, case_id);
+CREATE INDEX IF NOT EXISTS idx_bench_results_case ON bench_results(case_id, run_id);

@@ -52,6 +52,10 @@ export const TOOL_REGISTRY: ToolDefinition[] = [
   { name: "search_files", description: "Найти текст в файлах проекта", risk: "safe", available: true },
   { name: "write_file", description: "Записать или заменить файл проекта", risk: "review", available: true },
   { name: "edit_file", description: "Изменить фрагмент файла", risk: "review", available: true },
+  // Несколько правок за раз и всё-или-ничего. Стоит рядом с edit_file
+  // намеренно: одна правка — edit_file, несколько — apply_patch, а
+  // write_file остаётся только для НОВЫХ файлов.
+  { name: "apply_patch", description: "Изменить несколько мест файла разом (атомарно)", risk: "review", available: true },
   { name: "call_model", description: "Вызвать модель для текста: перевести, переписать, объяснить", risk: "safe", available: true },
   { name: "git_diff", description: "Сравнить ветки или версии", risk: "safe", available: true },
   { name: "run_tests", description: "Прогнать тесты проекта через GitHub Actions", risk: "review", available: true },

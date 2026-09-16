@@ -8,7 +8,6 @@ import { handleUpload } from "./lib/upload";
 import { describeRegistry, allCapabilities } from "./lib/agent-registry";
 import { describeTools } from "./lib/tool-registry";
 import { addMessage, deleteConversation, ensureConversation, listMessages } from "./lib/chat-store";
-import { ExecutionEngine } from "./core/execution-engine";
 import { listMissionEvents } from "./lib/event-store";
 import { MODEL_REGISTRY } from "./lib/model-registry";
 import { extractText, runModel } from "./lib/model-router";
@@ -17,6 +16,21 @@ import { chargeWrites, estimateMissionWrites } from "./lib/write-budget";
 import { validateAgainstCanon, summarizeCanon } from "./lib/canon-check";
 import { loadAttachments, attachmentsToText } from "./lib/attachments";
 import { log } from "./lib/resilience";
+import {
+  MAX_PENDING_HINTS,
+  finishMission,
+  isTerminal,
+  reapStaleMissions,
+  requestCancel,
+  sendHint,
+} from "./lib/mission-state";
+import { issueTicket, redeemTicket } from "./lib/ws-ticket";
+import { lookup as idemLookup, readKey as idemKey, remember as idemRemember } from "./lib/idempotency";
+import { SEED_CASES } from "./bench/cases";
+import { runBench } from "./bench/runner";
+import { listRuns, loadOutcomes, saveRun } from "./bench/store";
+import { runInContainer, detectBackend } from "./core/sandbox";
+import { syncWorkspaceToSandbox } from "./core/workspace-sync";
 
 export { Orchestrator };
 
@@ -80,6 +94,32 @@ export default {
       });
       return json({ error: "Внутренняя ошибка." }, env, 500);
     }
+  },
+
+  /**
+   * КРОН: сборщик зависших миссий.
+   *
+   * Нужен именно потому, что миссия теперь идёт в фоне. Durable Object
+   * можно выселить, инстанс — перезапустить, запланированную задачу —
+   * не доставить. Любой из этих случаев оставляет строку в "executing"
+   * навсегда, и интерфейс вечно показывает работу, которой давно нет.
+   * Сама остановленная миссия о себе не сообщит — сообщить некому.
+   *
+   * Расписание — в wrangler.toml, [triggers].
+   */
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      (async () => {
+        try {
+          const { reaped } = await reapStaleMissions(env);
+          log("info", "cron.reaper_done", { cron: event.cron, reaped });
+        } catch (err) {
+          log("error", "cron.reaper_failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })(),
+    );
   },
 } satisfies ExportedHandler<Env>;
 
@@ -164,10 +204,37 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       url.pathname === "/api/conversations" ||
       url.pathname === "/api/polish" ||
       url.pathname === "/api/stream" ||
+      url.pathname === "/api/stream/ticket" ||
+      // Остановка миссии — тоже платный контур: она меняет состояние
+      // чужой работы, и открывать её было бы способом гасить чужие
+      // миссии, зная один только идентификатор.
+      url.pathname === "/api/mission/cancel" ||
+      url.pathname === "/api/mission/hint" ||
+      url.pathname === "/api/bench" ||
       url.pathname.startsWith("/api/projects/");
 
     if (isProtected) {
-      const auth = checkAuth(request, env);
+      /* Билет вместо токена — только для рукопожатия WebSocket.
+       *
+       * Конструктор WebSocket в браузере не даёт выставить заголовок
+       * Authorization, поэтому единственный канал там — строка запроса. А
+       * строка запроса оседает в логах Cloudflare, в истории браузера и в
+       * Referer, и класть туда ПОСТОЯННЫЙ токен от всех платных
+       * эндпоинтов — значит раздать его насовсем.
+       *
+       * Билет годен минуту и один раз (см. lib/ws-ticket.ts): утечь он
+       * может так же легко, но утекает уже мусор. Токен в query всё ещё
+       * принимается checkAuth — ради curl и старых клиентов, но интерфейс
+       * им больше не пользуется. */
+      const ticket = url.pathname === "/api/stream" ? url.searchParams.get("ticket") : null;
+      const auth = ticket
+        ? await (async () => {
+            const caller = await redeemTicket(env, ticket);
+            return caller
+              ? { ok: true as const, caller }
+              : { ok: false as const, status: 401, error: "Билет недействителен или уже использован." };
+          })()
+        : checkAuth(request, env);
       if (!auth.ok) {
         log("warn", "auth.rejected", { path: url.pathname, status: auth.status });
         return json({ error: auth.error }, env, auth.status ?? 401);
@@ -212,6 +279,15 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           );
         }
       }
+    }
+
+    /* Билет на подключение к потоку. Выдаётся по обычному токену в
+     * заголовке, живёт минуту и гасится при первом использовании —
+     * см. lib/ws-ticket.ts про то, почему постоянному токену не место
+     * в строке запроса. */
+    if (url.pathname === "/api/stream/ticket" && request.method === "POST") {
+      const issued = await issueTicket(env, "shared");
+      return json({ success: true, ...issued }, env);
     }
 
     if (url.pathname === "/api/stream") {
@@ -358,15 +434,36 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         );
       }
 
+      /* Повтор того же запроса не должен запускать вторую миссию.
+       * Дрогнувшая связь на мобильном интернете, двойное нажатие, повтор
+       * от самого клиента — раньше каждый из этих случаев стоил ещё
+       * одного полного прогона моделей, и заметить это можно было только
+       * по счёту. Ключ необязателен: без него поведение прежнее. */
+      const idemScope = "mission";
+      const idempotencyKey = idemKey(request);
+      if (idempotencyKey) {
+        const seen = await idemLookup(env, idemScope, idempotencyKey);
+        if (seen) {
+          log("info", "mission.idempotent_hit", { missionId: seen.missionId });
+          return json(
+            { success: true, missionId: seen.missionId, status: "accepted", deduplicated: true },
+            env,
+            200,
+          );
+        }
+      }
+
       const missionId = crypto.randomUUID();
+      const maxIterations = Math.max(1, Math.min(Number(body.maxIterations) || 8, 20));
+
       // Эта запись ОБЯЗАНА пройти, и падать здесь правильно: без строки в
       // missions миссию нечем отслеживать и не к чему привязать события.
       // Отказ ДО работы дешевле, чем осиротевший прогон, потративший модели.
       try {
         await env.AZRAIL_D1.prepare(
-          `INSERT INTO missions (id, project_id, goal, status, created_at) VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO missions (id, project_id, goal, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
         )
-          .bind(missionId, body.projectId, goal, "executing", new Date().toISOString())
+          .bind(missionId, body.projectId, goal, "queued", new Date().toISOString(), new Date().toISOString())
           .run();
       } catch (err) {
         log("error", "mission.create_failed", {
@@ -384,61 +481,128 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         );
       }
 
-      const engine = new ExecutionEngine(env);
-      // Оркестратор нужен только как канал вещания: сама миссия исполняется
-      // здесь, но карта шагов в интерфейсе живёт на его сокете.
+      /* ── Миссия уходит в фон ───────────────────────────────────────
+       *
+       * Здесь раньше стоял `await engine.runMission(...)` — весь цикл из
+       * восьми-двадцати шагов с вызовами модели исполнялся внутри этого
+       * HTTP-запроса. Cloudflare обрывает клиентское соединение примерно
+       * на сотой секунде: длинная миссия отдавала 524, результат терялся,
+       * а строка в missions навсегда оставалась в "executing", потому что
+       * запись финального статуса стояла ПОСЛЕ недостижимого await.
+       *
+       * Теперь роут только ставит задачу и отдаёт missionId. Работа идёт
+       * в Durable Object оркестратора (см. startMission/runMissionTask):
+       * у него нет клиентского соединения, обрывать нечего.
+       *
+       * Ответ 202, а не 200: работа принята, но не выполнена. Клиент
+       * следит за ней через WebSocket или опросом GET /api/mission. */
       const missionSocket = await getAgentByName(env.Orchestrator, body.projectId);
-      const result = await engine.runMission(
-        { message: goal, projectId: body.projectId, preferredModel: body.preferredModel },
-        {
+      try {
+        await missionSocket.startMission({
           missionId,
           projectId: body.projectId,
-          iteration: 0,
-          maxIterations: body.maxIterations ?? 8,
+          goal,
+          maxIterations,
           preferredModel: body.preferredModel,
-          // Промис ВОЗВРАЩАЕТСЯ, а не теряется: это вызов чужого Durable
-          // Object, и движок его ждёт (см. ExecutionContext.onEvent).
-          onEvent: async (payload) => {
-            await missionSocket.broadcastMissionEvent(payload);
-          },
-          // Мост к агентам: сам движок не Durable Object и subAgent()
-          // позвать не может. Через это git_diff и run_tests идут тем же
-          // путём, что и обычные задачи, — без второй копии работы с
-          // GitHub API и её отдельных проверок.
-          invokeCapability: (capability, req) => missionSocket.invokeCapability(capability, req),
           // Хост берётся ИЗ ЗАПРОСА: на своём домене предпросмотр должен
-          // вести на него же, а не на workers.dev.
+          // вести на него же, а не на workers.dev. Внутри фоновой задачи
+          // запроса уже нет — значит, передать надо сейчас.
           publicHostname: new URL(request.url).hostname,
-        },
-      );
-
-      // А ВОТ ЗДЕСЬ падать нельзя. Работа уже сделана, файлы записаны,
-      // модели потрачены — и уронить всё это из-за неудавшейся отметки о
-      // завершении значит отдать пользователю ошибку вместо готового
-      // результата. Статус в базе останется "executing"; это неточность в
-      // журнале, а не потеря работы.
-      const finishedAt = new Date().toISOString();
-      try {
-        await env.AZRAIL_D1.prepare(
-          `UPDATE missions SET status = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
-        )
-          .bind(
-            result.status === "done" ? "completed" : result.status === "failed" ? "failed" : "waiting_approval",
-            finishedAt,
-            finishedAt,
-            missionId,
-          )
-          .run();
-      } catch (err) {
-        log("error", "mission.status_write_failed", {
-          missionId,
-          error: err instanceof Error ? err.message : String(err),
         });
+      } catch (err) {
+        // Не удалось поставить в очередь — миссия не должна остаться
+        // висеть в "queued" до сборщика зависших: о неудаче известно
+        // ПРЯМО СЕЙЧАС, и честнее закрыть её сразу.
+        const message = err instanceof Error ? err.message : String(err);
+        log("error", "mission.schedule_failed", { missionId, error: message });
+        await finishMission(env, missionId, "failed", {
+          status: "failed",
+          agent: "orchestrator",
+          summary: "Не удалось поставить миссию в работу.",
+          error: message,
+        });
+        return json({ error: "Не удалось запустить миссию.", missionId }, env, 500);
       }
+
+      if (idempotencyKey) await idemRemember(env, idemScope, idempotencyKey, missionId);
 
       // Бюджет и остаток уходят в ответ: интерфейс предупреждает о
       // приближении к потолку заранее, а не сообщает об упоре постфактум.
-      return json({ success: true, budget: { used: budget.used, limit: budget.limit, remaining: budget.remaining }, missionId, result }, env, result.status === "failed" ? 500 : 200);
+      return json(
+        {
+          success: true,
+          missionId,
+          status: "accepted",
+          budget: { used: budget.used, limit: budget.limit, remaining: budget.remaining },
+        },
+        env,
+        202,
+      );
+    }
+
+    /* Остановка идущей миссии.
+     *
+     * До этого остановить её было нечем: кнопка «Отменить» в интерфейсе
+     * рвала HTTP-соединение, а цикл на сервере продолжал жечь модели и
+     * бюджет записей до конца maxIterations, ни о чём не подозревая.
+     *
+     * Обрыв происходит на границе шага, а не мгновенно: прервать на
+     * середине записи файла значит оставить проект в состоянии, которого
+     * не было ни до, ни после. */
+    if (url.pathname === "/api/mission/cancel" && request.method === "POST") {
+      const cancelBody = (await request.json().catch(() => ({}))) as { missionId?: string };
+      const id = cancelBody.missionId?.trim();
+      if (!id) return json({ error: "missionId обязателен." }, env, 400);
+
+      const outcome = await requestCancel(env, id);
+      if (outcome.reason === "not_found") return json({ error: "Миссия не найдена." }, env, 404);
+      if (outcome.reason === "already_finished") {
+        return json(
+          { success: false, missionId: id, status: outcome.status, error: "Миссия уже завершена — останавливать нечего." },
+          env,
+          409,
+        );
+      }
+      log("info", "mission.cancel_requested", { missionId: id });
+      return json({ success: true, missionId: id, status: "cancelling" }, env);
+    }
+
+    /* Слово человека посреди идущей миссии.
+     *
+     * До этого маршрута единственным способом поправить агента на ходу
+     * была отмена — то есть убить работу вместе с наработанным
+     * контекстом. Подсказка ложится в очередь; цикл забирает её перед
+     * следующим шагом, на той же границе, где проверяет отмену. */
+    if (url.pathname === "/api/mission/hint" && request.method === "POST") {
+      const hintBody = (await request.json().catch(() => ({}))) as { missionId?: string; text?: string };
+      const hintId = hintBody.missionId?.trim();
+      if (!hintId) return json({ error: "missionId обязателен." }, env, 400);
+
+      const outcome = await sendHint(env, hintId, hintBody.text ?? "");
+      if (outcome.reason === "not_found") return json({ error: "Миссия не найдена." }, env, 404);
+      if (outcome.reason === "empty") return json({ error: "Пустая подсказка." }, env, 400);
+      // Опоздавшая подсказка отклоняется явно: принять её молча значило бы
+      // дать человеку думать, что она будет учтена.
+      if (outcome.reason === "already_finished") {
+        return json(
+          { success: false, missionId: hintId, error: "Миссия уже завершена — подсказку некому прочитать." },
+          env,
+          409,
+        );
+      }
+      if (outcome.reason === "too_many") {
+        return json(
+          {
+            success: false,
+            missionId: hintId,
+            error: `Очередь подсказок заполнена (${MAX_PENDING_HINTS}). Дождись, пока агент прочитает предыдущие.`,
+          },
+          env,
+          429,
+        );
+      }
+      log("info", "mission.hint_queued", { missionId: hintId });
+      return json({ success: true, missionId: hintId }, env);
     }
 
     if (url.pathname === "/api/mission" && request.method === "GET") {
@@ -481,10 +645,28 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         status: (mission as { status?: string } | null)?.status,
       });
 
+      /* Результат миссии теперь ЗДЕСЬ, а не в ответе на POST: POST
+       * возвращается сразу, ещё до начала работы. Колонка может
+       * отсутствовать на базе, где не применена миграция 002 — тогда
+       * поле просто пустое, а не ошибка на весь отчёт. */
+      const row = mission as { result_json?: string | null; status?: string } | null;
+      let result: unknown = null;
+      if (row?.result_json) {
+        try {
+          result = JSON.parse(row.result_json);
+        } catch {
+          result = null;
+        }
+      }
+
       return json(
         {
           success: true,
           mission,
+          // Явный признак «работа идёт» — чтобы клиенту не приходилось
+          // угадывать это по набору статусов, которые он знать не обязан.
+          done: isTerminal(row?.status),
+          result,
           events: await listMissionEvents(env, missionId),
           plan,
           calls,
@@ -494,6 +676,101 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         },
         env,
       );
+    }
+
+    /* ИЗМЕРИТЕЛЬ КАЧЕСТВА.
+     *
+     * Отвечает на единственный вопрос, на который до него ответить было
+     * нельзя: стало лучше или хуже после правки в промптах, в выборе
+     * модели, в цикле выполнения. Одна миссия этого не показывает —
+     * разброс между двумя запусками одной задачи больше, чем разница
+     * между двумя версиями промпта.
+     *
+     * ПРОГОН ДОРОГОЙ: каждая задача — это полная миссия с вызовами
+     * моделей и записями. Поэтому явное подтверждение (confirm) и
+     * последовательное исполнение, а не параллельное. */
+    if (url.pathname === "/api/bench" && request.method === "POST") {
+      const benchBody = (await request.json().catch(() => ({}))) as {
+        confirm?: boolean;
+        only?: string[];
+        note?: string;
+      };
+
+      if (!benchBody.confirm) {
+        // Отказ с ЦЕНОЙ в тексте, а не просто «нужно подтверждение»:
+        // решение принимают, зная стоимость, а не после счёта.
+        const planned = benchBody.only?.length
+          ? SEED_CASES.filter((c) => benchBody.only!.includes(c.id))
+          : SEED_CASES;
+        return json(
+          {
+            error: "Нужно подтверждение: прогон запускает полные миссии.",
+            cases: planned.map((c) => ({ id: c.id, difficulty: c.difficulty, maxIterations: c.maxIterations })),
+            estimatedModelCalls: planned.reduce((sum, c) => sum + c.maxIterations, 0),
+            hint: 'Повтори запрос с {"confirm": true}.',
+          },
+          env,
+          400,
+        );
+      }
+
+      if (detectBackend(env) !== "container") {
+        // Без контейнера прогнать тесты негде, а без прогона тестов
+        // измерять нечего. Отказ честнее числа, полученного неизвестно из
+        // чего.
+        return json(
+          { error: "Измеритель требует контейнерную песочницу: без неё нечем прогнать тесты." },
+          env,
+          503,
+        );
+      }
+
+      const runId = crypto.randomUUID().slice(0, 8);
+      const startedAt = new Date().toISOString();
+      const orchestrator = await getAgentByName(env.Orchestrator, `bench-${runId}`);
+
+      const result = await runBench(
+        env,
+        {
+          // Миссия идёт тем же путём, что и обычная, — иначе измерялся бы
+          // не тот код, который работает у пользователя.
+          runMission: async ({ projectId, goal, maxIterations }) => {
+            const missionId = crypto.randomUUID();
+            await env.AZRAIL_D1.prepare(
+              `INSERT INTO missions (id, project_id, goal, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)`,
+            )
+              .bind(missionId, projectId, goal, new Date().toISOString(), new Date().toISOString())
+              .run();
+            return orchestrator.runBenchMission({ missionId, projectId, goal, maxIterations });
+          },
+          execInSandbox: async (projectId, command) => {
+            const res = await runInContainer(env, command, { sandboxName: projectId });
+            return { exitCode: res.exitCode, output: res.output };
+          },
+          syncWorkspace: (projectId) => syncWorkspaceToSandbox(env, projectId),
+        },
+        SEED_CASES,
+        { runId, only: benchBody.only },
+      );
+
+      try {
+        await saveRun(env, runId, result.report, result.outcomes, { note: benchBody.note, startedAt });
+      } catch (err) {
+        log("error", "bench.save_failed", {
+          runId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      return json({ success: true, ...result }, env);
+    }
+
+    if (url.pathname === "/api/bench" && request.method === "GET") {
+      const runId = url.searchParams.get("runId");
+      if (runId) {
+        return json({ success: true, runId, outcomes: await loadOutcomes(env, runId) }, env);
+      }
+      return json({ success: true, runs: await listRuns(env) }, env);
     }
 
     if (url.pathname === "/api/conversations" && request.method === "GET") {
@@ -721,6 +998,41 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // для панели управления AZRAIL.
     const agentResponse = await routeAgentRequest(request, env, { cors: true });
     if (agentResponse) return agentResponse;
+
+    /* Неизвестный путь отдаёт ПРИЛОЖЕНИЕ, а не голую строку.
+     *
+     * Биндинг ASSETS был объявлен в wrangler.toml и не читался ни одной
+     * строкой кода — это было честно записано там же в комментарии и так
+     * и осталось несделанным. Итог: любая опечатка в адресе (или переход
+     * по ссылке на внутренний раздел) выдавала текст «AZRAIL OS — Core
+     * API Running» — с виду мёртвый сервис.
+     *
+     * Только для GET и только когда браузер просит HTML: промахнувшийся
+     * запрос к /api/… должен получить честную ошибку, а не страницу,
+     * которую он не сможет разобрать. */
+    const wantsHtml = (request.headers.get("Accept") ?? "").includes("text/html");
+    if (request.method === "GET" && wantsHtml && !url.pathname.startsWith("/api/") && env.ASSETS) {
+      try {
+        const page = await env.ASSETS.fetch(new Request(new URL("/index.html", url), request));
+        if (page.ok) {
+          // 200, а не 404: это единственная страница приложения, и для
+          // клиентской навигации она валидный ответ на любой её путь.
+          return new Response(page.body, {
+            status: 200,
+            headers: getCors(env, { "Content-Type": "text/html; charset=utf-8" }),
+          });
+        }
+      } catch (err) {
+        log("warn", "assets.fallback_failed", {
+          path: url.pathname,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (request.method === "GET" && !url.pathname.startsWith("/api/")) {
+      return json({ error: `Неизвестный путь: ${url.pathname}` }, env, 404);
+    }
 
     return new Response("AZRAIL OS — Core API Running", { headers: getCors(env) });
 }

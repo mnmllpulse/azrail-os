@@ -1,5 +1,6 @@
 import type { Env } from "../types";
 import { pathSegments } from "./safe-path";
+import { applyHunks, type Hunk } from "./patch";
 
 const PREFIX = (projectId: string) => `projects/${projectId}/workspace/`;
 
@@ -7,6 +8,59 @@ export async function writeFile(env: Env, projectId: string, path: string, conte
   const key = PREFIX(projectId) + pathSegments(path, "workspace path");
   await env.AZRAIL_R2.put(key, content, { httpMetadata: { contentType: "text/plain; charset=utf-8" } });
   return { key, path, bytes: new TextEncoder().encode(content).byteLength };
+}
+
+/**
+ * Запись с защитой от нечаянной перезаписи.
+ *
+ * ЗАЧЕМ. write_file переписывает файл ЦЕЛИКОМ содержимым, которое модель
+ * сгенерировала заново. Для нового файла это ровно то, что нужно. Для
+ * существующего в пятьсот строк — способ потерять четыреста восемьдесят,
+ * которых модель просто не держала в голове. Предупреждение об этом висело
+ * в системном промпте, то есть проблему знали и надеялись на осторожность
+ * модели.
+ *
+ * Надежда заменена отказом: существующий файл перезаписывается только при
+ * явном overwrite: true. Отказ содержит подсказку про apply_patch — модели
+ * нужен не запрет, а следующий шаг.
+ *
+ * ПОРОГ УСЫХАНИЯ. Даже с overwrite: true запись, ужимающая файл более чем
+ * вчетверо, отклоняется: это почти всегда не «переписал», а «не дописал».
+ * Порог обходится тем же overwrite вместе с явным shrink: true — то есть
+ * осознанно, а не случайно.
+ */
+export async function writeFileGuarded(
+  env: Env,
+  projectId: string,
+  path: string,
+  content: string,
+  opts: { overwrite?: boolean; shrink?: boolean } = {},
+) {
+  const existing = await readFile(env, projectId, path);
+
+  if (existing && !opts.overwrite) {
+    throw new Error(
+      `Файл ${path} уже существует (${existing.content.length} символов). ` +
+        `Полная перезапись сотрёт всё, чего нет в присланном тексте. ` +
+        `Правь через apply_patch или edit_file. ` +
+        `Если файл действительно нужно заменить целиком — повтори с overwrite: true.`,
+    );
+  }
+
+  if (existing && opts.overwrite && !opts.shrink) {
+    const was = existing.content.length;
+    const now = content.length;
+    if (was > 400 && now * 4 < was) {
+      throw new Error(
+        `Файл ${path} ужимается с ${was} до ${now} символов — больше чем вчетверо. ` +
+          `Обычно это значит, что часть файла не дописана, а не что он стал короче. ` +
+          `Если сокращение намеренное — повтори с overwrite: true и shrink: true.`,
+      );
+    }
+  }
+
+  const result = await writeFile(env, projectId, path, content);
+  return { ...result, replaced: !!existing, previousBytes: existing ? existing.content.length : 0 };
 }
 
 export async function readFile(env: Env, projectId: string, path: string) {
@@ -98,4 +152,34 @@ export async function searchFiles(env: Env, projectId: string, needle: string, l
   }
 
   return { matches: out, scannedAll, scanned: files.length };
+}
+
+
+/**
+ * Правка файла набором привязанных кусков — всё или ничего.
+ *
+ * Логика применения живёт в lib/patch.ts и не знает про хранилище: так её
+ * можно проверить на всех краевых случаях без R2. Здесь — только чтение,
+ * применение и запись.
+ */
+export async function applyPatch(env: Env, projectId: string, path: string, hunks: Hunk[]) {
+  const current = await readFile(env, projectId, path);
+  if (!current) {
+    // Патч по несуществующему файлу — не ошибка инструмента, а ошибка
+    // выбора инструмента. Так и сказано, чтобы модель не пыталась
+    // «починить» патч.
+    throw new Error(`Файл не найден: ${path}. Новый файл создаётся через write_file, а не патчем.`);
+  }
+
+  const result = applyHunks(current.content, hunks);
+  if (!result.ok) throw new Error(result.error);
+
+  await writeFile(env, projectId, path, result.content);
+  return {
+    path,
+    applied: result.applied,
+    added: result.added,
+    removed: result.removed,
+    bytes: new TextEncoder().encode(result.content).byteLength,
+  };
 }
