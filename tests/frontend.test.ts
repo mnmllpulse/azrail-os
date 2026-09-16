@@ -186,3 +186,93 @@ describe("Интерфейс умеет ждать фоновую миссию",
     expect(js).toContain("mission.cancelled");
   });
 });
+
+
+/**
+ * СЛОМАННАЯ КНОПКА «НОВАЯ ЗАДАЧА».
+ *
+ * Функция showHintBar была объявлена ВНУТРИ функции send(). Это делало её
+ * локальной: снаружи send() её не существует. Обработчик «Новая задача» —
+ * отдельный колбэк, и вызов оттуда падал на ReferenceError, не доходя до
+ * переключения экрана.
+ *
+ * Ошибка тихая: в интерфейсе просто ничего не происходит, а увидеть её
+ * можно только в консоли браузера, которой на телефоне нет.
+ *
+ * ПЕРВЫЙ ДИАГНОЗ БЫЛ НЕВЕРЕН. Сначала решил, что на странице два блока
+ * <script> — детектор принял `<script` внутри JS-строк за настоящие теги.
+ * Блок один; дело было во вложенности. Проверка ниже смотрит именно на
+ * область видимости, а не на теги.
+ */
+describe("Обработчики не зовут чужих локальных функций", () => {
+  const html = readFileSync(resolve(__dirname, "..", "public/index.html"), "utf-8");
+  const lines = html.split("\n");
+  const indent = (l: string) => l.length - l.trimStart().length;
+
+  /**
+   * Границы тела функции по балансу скобок.
+   *
+   * Первая версия проверки смотрела на ближайшую открывающую скобку выше
+   * — и споткнулась на законном вызове из вложенного колбэка ВНУТРИ
+   * send(). Важна принадлежность телу функции, а не соседняя строка.
+   */
+  function bodyRange(declNeedle: string): [number, number] {
+    const start = lines.findIndex((l) => l.includes(declNeedle));
+    if (start < 0) return [-1, -1];
+    let depth = 0;
+    for (let i = start; i < lines.length; i++) {
+      for (const ch of lines[i]) {
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) return [start, i];
+        }
+      }
+    }
+    return [start, lines.length - 1];
+  }
+
+  const findLine = (needle: string) => lines.findIndex((l) => l.includes(needle));
+
+  it("showHintBar локальна для send() — и снаружи не вызывается", () => {
+    const [from, to] = bodyRange("function send()");
+    expect(from, "send() не найдена").toBeGreaterThan(0);
+
+    const decl = findLine("function showHintBar(");
+    expect(decl, "объявление вне send() — тогда и проверка ниже не о том").toBeGreaterThan(from);
+    expect(decl).toBeLessThan(to);
+
+    lines.forEach((line, i) => {
+      if (!line.includes("showHintBar(")) return;
+      const t = line.trim();
+      if (t.startsWith("*") || t.startsWith("//")) return;
+      expect(i >= from && i <= to, `вызов в строке ${i + 1} вне тела send()`).toBe(true);
+    });
+  });
+
+  it("обработчики кнопок зовут только функции верхнего уровня", () => {
+    // Всё, на что опираются кнопки результата, должно быть объявлено на
+    // верхнем уровне скрипта — иначе повторится та же тихая поломка.
+    for (const name of ["function show(which)", "function grow()", "var lastPrompt ="]) {
+      const at = findLine(name);
+      expect(at, `${name} не найдено`).toBeGreaterThan(0);
+      expect(indent(lines[at]), `${name} вложено слишком глубоко`).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it("строка подсказки скрывается в show(), а не вызовом снаружи", () => {
+    const showFn = html.slice(html.indexOf("function show(which)"));
+    expect(showFn.slice(0, 900)).toContain("hintBar");
+    expect(showFn.slice(0, 900)).toContain("which !== 'workStage'");
+  });
+
+  it("есть возврат к формулировке с сохранением текста", () => {
+    // Задача, провалившаяся из-за одного неудачного слова, заставляла
+    // набирать весь текст заново — с телефона это наказание за чужую
+    // ошибку.
+    expect(html).toContain('id="backBtn"');
+    const handler = html.slice(html.indexOf("$('backBtn')"));
+    expect(handler.slice(0, 400)).toContain("ta.value = lastPrompt");
+    expect(handler.slice(0, 400)).toContain("show('askStage')");
+  });
+});

@@ -195,9 +195,19 @@ describe("Строка подсказки в интерфейсе", () => {
   it("скрыта, пока нет миссии", () => {
     // У одиночной задачи подсказку некому прочитать. Показывать её там —
     // обещать несуществующее.
+    //
+    // Проверка изменилась после реальной поломки: раньше она сторожила
+    // вызов showHintBar(false) перед каждым переключением экрана. Именно
+    // этот способ и сломал кнопку «Новая задача» — на странице два
+    // независимых скрипта, и вызовы из второго падали на ReferenceError.
+    // Теперь скрытие живёт внутри show(), общей для обоих, и держится на
+    // классе, а не на области видимости.
     expect(html).toContain('class="hintbar hidden" id="hintBar"');
     expect(html).toContain("showHintBar(true);");
-    expect(html).toContain("showHintBar(false); show('askStage');");
+
+    const showFn = html.slice(html.indexOf("function show(which)"), html.indexOf("function send()"));
+    expect(showFn).toContain("hintBar");
+    expect(showFn).toContain("classList.add('hidden')");
   });
 
   it("отправляется и по кнопке, и по Enter", () => {

@@ -334,6 +334,16 @@ button { cursor: pointer; }
 }
 .cancel:hover { color: #fff; border-color: var(--line-str); }
 
+/* Две кнопки в конце результата. На узком экране встают в столбик:
+   рядом они ужимаются до нечитаемого.
+
+   Селектор по элементу, а не по классу .again: правило с тем же классом
+   встаёт выше основного и перекрывает его при проверке размеров — на
+   этом меня и поймал собственный тест проекта. Отступ переехал на
+   контейнер, иначе margin-top кнопок сложился бы внутри строки. */
+.endrow { display: flex; gap: var(--s3); flex-wrap: wrap; margin-top: var(--s5); }
+.endrow > button { flex: 1 1 160px; margin-top: 0; }
+
 /* Строка подсказки. Показывается только у миссии — у одиночной задачи её
    некому прочитать, и предлагать её значило бы обещать несуществующее. */
 .hintbar { display: flex; gap: var(--s3); margin-top: var(--s4); }
@@ -928,7 +938,15 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
         <div class="files hidden" id="rFiles"></div>
         <div class="acts hidden" id="rActs"></div>
         <div class="out hidden" id="rData"></div>
-        <button class="again" id="againBtn">Новая задача</button>
+        <!-- Две разные вещи, и это важно.
+             «Поправить» возвращает к полю С ТЕКСТОМ: чаще всего задача
+             провалилась из-за формулировки, и набирать её заново с
+             телефона — наказание за чужую ошибку.
+             «Новая задача» чистит всё. -->
+        <div class="endrow">
+          <button class="again" id="backBtn">Поправить задачу</button>
+          <button class="again" id="againBtn">Новая задача</button>
+        </div>
       </section>
 
     </div>
@@ -1381,6 +1399,21 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     ['askStage', 'workStage', 'resultStage'].forEach(function (id) {
       $(id).classList.toggle('hidden', id !== which);
     });
+
+    /* Строка подсказки живёт только на рабочем экране: у одиночной задачи
+     * и на экране результата её некому прочитать.
+     *
+     * Скрытие ЗДЕСЬ, а не вызовом showHintBar на каждом переходе. На
+     * странице два независимых скрипта, showHintBar видна только в
+     * первом, и вызов из второго ронял обработчик молча — так «Новая
+     * задача» и перестала работать. show() общая для обоих, и правка
+     * классом не зависит от области видимости вообще. */
+    var bar = document.getElementById('hintBar');
+    if (bar && which !== 'workStage') {
+      bar.classList.add('hidden');
+      var inp = document.getElementById('hintInput');
+      if (inp) inp.value = '';
+    }
   }
 
   function send() {
@@ -1460,7 +1493,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       }
       stopPolling();
       stop();
-      showHintBar(false); show('askStage');
+      show('askStage');
       setPulse('on', 'на связи');
     };
 
@@ -1471,11 +1504,22 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
      * несуществующее. Функция видна ровно тогда, когда ею можно
      * воспользоваться.
      */
+    /* Показ строки подсказки.
+     *
+     * ВАЖНО: на странице ДВА независимых скрипта, и эта функция видна
+     * только в первом. Вызов её из второго роняет обработчик молча —
+     * именно так «Новая задача» перестала работать. Поэтому скрытие
+     * строки привязано ещё и к уходу с рабочего экрана внутри show(),
+     * а звать showHintBar откуда попало не нужно.
+     */
     function showHintBar(on) {
       var bar = $('hintBar');
       if (!bar) return;
       bar.classList.toggle('hidden', !on);
-      if (!on) $('hintInput').value = '';
+      if (!on) {
+        var inp = $('hintInput');
+        if (inp) inp.value = '';
+      }
     }
 
     function sendHint() {
@@ -1810,7 +1854,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       });
       addAct('Проверить безопасность', function () {
         ta.value = 'Проверь на уязвимости файлы, которые ты только что сгенерировал.';
-        showHintBar(false); show('askStage');
+        show('askStage');
         send();
       });
       actsBox.classList.remove('hidden');
@@ -1833,7 +1877,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     if (lastPrompt) {
       addAct('Ещё вариант', function () {
         ta.value = lastPrompt;
-        showHintBar(false); show('askStage');
+        show('askStage');
         send();
       });
       actsBox.classList.remove('hidden');
@@ -2257,6 +2301,23 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     ta.focus();
   });
 
+  /* Вернуться к формулировке, не потеряв её.
+   *
+   * Раньше выхода из результата не было вовсе: обе кнопки начинали с
+   * чистого листа. Задача, провалившаяся из-за одного неудачного слова,
+   * заставляла набирать весь текст заново — с телефона это дорого.
+   *
+   * Текст берётся из lastPrompt: поле ввода к моменту показа результата
+   * уже очищено, восстанавливать оттуда нечего. */
+  $('backBtn').addEventListener('click', function () {
+    show('askStage');
+    if (lastPrompt) {
+      ta.value = lastPrompt;
+      grow();
+    }
+    ta.focus();
+  });
+
   $('againBtn').addEventListener('click', function () {
     // Новая задача — значит и варианты прошлой сбрасываются. Иначе стрелки
     // листали бы ответы на РАЗНЫЕ вопросы, и «2/3» ничего не значило бы.
@@ -2268,7 +2329,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     $('attached').classList.add('hidden');
     undoBtn = null; // узел удалён вместе с содержимым контейнера выше
     resetTrace();
-    ta.value = ''; grow(); showHintBar(false); show('askStage'); ta.focus();
+    ta.value = ''; grow(); show('askStage'); ta.focus();
   });
 
   $('token').value = token;
@@ -3105,7 +3166,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       var openId = b.getAttribute('data-open');
       if (openId) { openView(openId); return; }
       var goto = b.getAttribute('data-goto');
-      if (goto === 'askStage') { openView('viewHome'); showHintBar(false); show('askStage'); ta.focus(); }
+      if (goto === 'askStage') { openView('viewHome'); show('askStage'); ta.focus(); }
     });
   });
 
