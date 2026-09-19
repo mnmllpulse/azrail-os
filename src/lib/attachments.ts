@@ -1,4 +1,5 @@
 import type { Env, AttachmentRef } from "../types";
+import { listZip, readEntry, ZipError } from "./zip-reader";
 
 /**
  * ЧТЕНИЕ ВЛОЖЕНИЙ ОБРАТНО ИЗ R2
@@ -13,10 +14,13 @@ import type { Env, AttachmentRef } from "../types";
  * исходных модулей». Ничего не падало — просто содержимое не доезжало.
  *
  * ЧТО ЭТОТ МОДУЛЬ ДЕЛАЕТ. Читает то, что уже лежит в R2, и подмешивает
- * текст в задачу. ЧЕГО НЕ ДЕЛАЕТ — не распаковывает архивы: в Worker нет
- * средств прочитать центральный каталог ZIP, а тянуть ради этого
- * библиотеку в воркер неразумно, когда рядом есть контейнер. Про архив
- * говорится прямо, а не выдаётся пустой результат.
+ * текст в задачу. ZIP распаковывается здесь же — см. lib/zip-reader.ts;
+ * прежний отказ «только в песочнице» опирался на неверную посылку, будто
+ * в Worker нечем распаковать deflate.
+ *
+ * Архив репозитория не влезает в окно модели целиком, поэтому правило
+ * такое: ПЕРЕЧЕНЬ файлов отдаётся полностью, СОДЕРЖИМОЕ — в пределах
+ * бюджета. Человек спрашивает «что внутри» чаще, чем «покажи всё».
  */
 
 /** Потолок на текст одного файла. Больше не влезет в окно модели с пользой. */
@@ -24,6 +28,19 @@ const MAX_TEXT_BYTES = 256 * 1024;
 
 /** Сколько вложений читать за раз: защита от «выделил всю папку». */
 const MAX_FILES = 12;
+
+/** Бюджет на один архив. Репозиторий — это сотни файлов; вывалить их
+ *  целиком значит забить окно модели и вытеснить саму задачу. */
+const ZIP_MAX_LISTED = 500;
+const ZIP_MAX_READ = 40;
+const ZIP_MAX_TOTAL = 192 * 1024;
+const ZIP_MAX_ONE = 64 * 1024;
+
+/** Шум сборки: в перечень не попадает — он ничего не говорит о проекте. */
+const ZIP_NOISE = /(^|\/)(__MACOSX|node_modules|\.git|dist|build|coverage|\.wrangler)(\/|$)|(^|\/)\.DS_Store$/;
+
+/** Файлы, по которым понятен проект. Читаются первыми, до общей очереди. */
+const ZIP_PRIORITY = /(^|\/)(readme|package\.json|wrangler\.|tsconfig|schema\.sql|index\.|main\.|app\.)/i;
 
 /** Расширения, которые имеет смысл читать как текст. */
 const TEXT_EXT = new Set([
@@ -50,6 +67,75 @@ export interface LoadedAttachment {
 }
 
 /**
+ * Разбирает архив: полный перечень плюс содержимое в пределах бюджета.
+ *
+ * Первым идёт перечень — он отвечает на вопрос «что внутри» даже тогда,
+ * когда до содержимого дело не дошло. Дальше файлы: сначала те, по которым
+ * понятен проект (README, package.json, конфиги, точки входа), потом
+ * остальные от меньшего к большему — так в бюджет влезает больше разных
+ * файлов, а не один толстый.
+ */
+async function readZip(buf: ArrayBuffer, archiveName: string): Promise<LoadedAttachment[]> {
+  const { entries, total } = listZip(buf, ZIP_MAX_LISTED);
+  const visible = entries.filter((e) => !ZIP_NOISE.test(e.path));
+
+  if (visible.length === 0) {
+    return [{ fileName: archiveName, skipped: "архив пуст или содержит только служебные файлы" }];
+  }
+
+  const listing = visible
+    .map((e) => `  ${e.path}  (${e.size >= 1024 ? Math.round(e.size / 1024) + " КБ" : e.size + " Б"})`)
+    .join("\n");
+
+  const hiddenNote = total > visible.length ? `\n  …и ${total - visible.length} служебных файлов (node_modules, .git и подобное) — пропущены` : "";
+
+  const out: LoadedAttachment[] = [{
+    fileName: `${archiveName} — оглавление`,
+    text: `Файлов: ${total}. Показано: ${visible.length}.\n\n${listing}${hiddenNote}`,
+  }];
+
+  const readable = visible.filter((e) => !e.skipped && TEXT_EXT.has(extOf(e.path)));
+  const queue = [...readable].sort((a, b) => {
+    const pa = ZIP_PRIORITY.test(a.path) ? 0 : 1;
+    const pb = ZIP_PRIORITY.test(b.path) ? 0 : 1;
+    return pa !== pb ? pa - pb : a.size - b.size;
+  });
+
+  let budget = ZIP_MAX_TOTAL;
+  let read = 0;
+
+  for (const entry of queue) {
+    if (read >= ZIP_MAX_READ || budget <= 0) break;
+    if (entry.size > ZIP_MAX_ONE) continue;
+
+    try {
+      const bytes = await readEntry(buf, entry);
+      const text = new TextDecoder("utf-8").decode(bytes);
+      out.push({ fileName: `${archiveName} → ${entry.path}`, text, bytes: bytes.byteLength });
+      budget -= bytes.byteLength;
+      read++;
+    } catch (err) {
+      out.push({
+        fileName: `${archiveName} → ${entry.path}`,
+        skipped: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const left = readable.length - read;
+  if (left > 0) {
+    // Иначе агент решит, что показанное — это весь проект, и станет
+    // рассуждать о нём как о целом.
+    out.push({
+      fileName: `${archiveName} — остаток`,
+      skipped: `ещё ${left} текстовых файлов не прочитаны: исчерпан бюджет (${ZIP_MAX_READ} файлов / ${Math.round(ZIP_MAX_TOTAL / 1024)} КБ). Назови нужный файл — прочитаю его отдельно`,
+    });
+  }
+
+  return out;
+}
+
+/**
  * Читает вложения из R2.
  *
  * Не бросает: недоступное вложение — не повод ронять задачу, которую
@@ -72,12 +158,27 @@ export async function loadAttachments(
     const ext = extOf(name);
 
     if (ARCHIVE_EXT.has(ext)) {
-      // Честный отказ вместо пустого результата. Человек должен понимать,
-      // почему архив не сработал, а не гадать.
-      out.push({
-        fileName: name,
-        skipped: "архив — распаковка возможна только в песочнице; пришли файлы по отдельности",
-      });
+      if (ext !== "zip") {
+        // tar/gz/rar/7z — другие форматы, каждый со своей распаковкой.
+        // Честный отказ лучше молчаливого пустого результата.
+        out.push({ fileName: name, skipped: `формат «${ext}» не распаковывается; пришли ZIP` });
+        continue;
+      }
+      if (!ref.r2Key) {
+        out.push({ fileName: name, skipped: "нет ключа в хранилище" });
+        continue;
+      }
+      try {
+        const obj = await env.AZRAIL_R2.get(ref.r2Key);
+        if (!obj) {
+          out.push({ fileName: name, skipped: "файл не найден в хранилище" });
+          continue;
+        }
+        out.push(...(await readZip(await obj.arrayBuffer(), name)));
+      } catch (err) {
+        const why = err instanceof ZipError ? err.message : err instanceof Error ? err.message : String(err);
+        out.push({ fileName: name, skipped: why });
+      }
       continue;
     }
 

@@ -69,7 +69,7 @@ export interface ExecutionContext {
    * Тип, который врёт про асинхронность, — это не мелочь стиля: он
    * отключает единственную проверку, которая ловит такую ошибку.
    */
-  onEvent?: (payload: { event: string; tool?: string; reason?: string; iteration?: number; maxIterations?: number; steps?: number; files?: number }) => void | Promise<void>;
+  onEvent?: (payload: { id?: string; event: string; tool?: string; reason?: string; iteration?: number; maxIterations?: number; steps?: number; files?: number }) => void | Promise<void>;
   /**
    * Вызов агента по возможности. Прокидывается роутом, у которого есть
    * ссылка на Оркестратор — сам движок Durable Object'ом не является и
@@ -1467,8 +1467,14 @@ export class ExecutionEngine {
     // Ровно тот же класс ошибки мы уже чинили в rememberFact: сбой
     // вспомогательной записи подменял результат основной работы.
     // Журнал важен, но он вторичен по отношению к делу, которое описывает.
+    // Опознавательный знак события. Одно и то же событие доезжает до
+    // интерфейса ДВУМЯ путями: живьём по сокету и вместе с опросом из
+    // базы. Без общего знака второй путь рисовал бы те же шаги заново,
+    // и карта миссии удваивалась бы на глазах. Знак присваивает база —
+    // он один и тот же в обоих каналах.
+    let eventId: string | undefined;
     try {
-      await emitMissionEvent(this.env, ctx.missionId, event, data);
+      eventId = (await emitMissionEvent(this.env, ctx.missionId, event, data)).id;
     } catch (err) {
       log("error", "execution.event_write_failed", {
         missionId: ctx.missionId,
@@ -1482,6 +1488,10 @@ export class ExecutionEngine {
       // await обязателен: вызов уходит в ЧУЖОЙ Durable Object. Без него
       // ввод-вывод переживает контекст, в котором был начат.
       await ctx.onEvent({
+        // Может отсутствовать, если запись в журнал не удалась. Тогда
+        // события нет и в базе — значит, опрос его не принесёт, и
+        // разойтись в двойную отрисовку неоткуда.
+        id: eventId,
         event,
         tool: typeof data?.tool === "string" ? data.tool : undefined,
         reason: typeof data?.reason === "string" ? data.reason : undefined,

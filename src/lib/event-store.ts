@@ -9,7 +9,12 @@ export async function emitMissionEvent(env: Env, missionId: string, type: string
 
 export async function listMissionEvents(env: Env, missionId: string, limit = 200) {
   const { results } = await env.AZRAIL_D1.prepare(
-    `SELECT id, mission_id, type, data, created_at FROM mission_events WHERE mission_id = ? ORDER BY created_at ASC LIMIT ?`
+    // Порядок по одному created_at НЕ устойчив: события цикла пишутся
+    // пачками внутри одной миллисекунды, и SQLite волен вернуть их в
+    // любом порядке. На карте миссии это выглядит как "пишет файл" до
+    // "читает файл" — то есть как враньё о ходе работы. rowid растёт
+    // строго по вставке и разводит совпавшие метки времени.
+    `SELECT id, mission_id, type, data, created_at FROM mission_events WHERE mission_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ?`
   ).bind(missionId, limit).all();
   return results.map((r: any) => ({ ...r, data: typeof r.data === "string" ? safeJson(r.data) : r.data }));
 }

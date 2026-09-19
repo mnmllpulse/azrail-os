@@ -78,7 +78,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
    * некому: карта миссии в интерфейсе живёт на сокете. Отсюда отдельный
    * вызов — не дубль хранения, а другая задача: показать сейчас.
    */
-  broadcastMissionEvent(payload: { event: string; tool?: string; reason?: string; iteration?: number; maxIterations?: number; steps?: number; files?: number }): void {
+  broadcastMissionEvent(payload: { id?: string; event: string; tool?: string; reason?: string; iteration?: number; maxIterations?: number; steps?: number; files?: number }): void {
     try {
       this.broadcast(JSON.stringify({ type: "mission_event", ...payload }));
     } catch (err) {

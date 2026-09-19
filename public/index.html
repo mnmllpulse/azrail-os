@@ -1452,8 +1452,13 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     var autonomous = $('autoMode').checked;
     // Карта имеет смысл только в автономном режиме: у одиночного прохода
     // шагов нет, и пустой каркас вводил бы в заблуждение.
+    // Соединение поднимается САМО. Просить человека сходить в другой
+    // раздел и нажать «Подключить» — перекладывать на него работу,
+    // которую система умеет сделать: намерение он уже показал, запустив
+    // задачу. Если связь не встанет, шаги всё равно придут опросом —
+    // поэтому здесь нет ни ожидания, ни предупреждения о неудаче.
     if (autonomous && (!ws || ws.readyState !== WebSocket.OPEN)) {
-      askNote('Для показа шагов нужна связь — открой «Живой журнал» и нажми «Подключить».');
+      try { connectWs(); } catch (e) { /* шаги дойдут опросом */ }
     }
 
     var t0 = Date.now();
@@ -1658,6 +1663,11 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
         api('/api/mission?missionId=' + encodeURIComponent(missionId))
           .then(function (rep) {
             if (cancelled) return;
+            // Шаги рисуются на КАЖДОМ ответе, до всякой проверки
+            // завершения: ради этого опрос и ходит так часто. Раньше
+            // поле events молча выбрасывалось, и до самого конца
+            // миссии человек не видел ничего.
+            if (rep) applyStoredEvents(rep.events);
             if (!rep || !rep.done) {
               delay = Math.min(10000, Math.round(delay * 1.4));
               pollTimer = setTimeout(tick, delay);
@@ -2571,7 +2581,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       } else if (data.type === 'chat_reply') {
         chatTurn('AZRAIL', data.text);
       } else if (data.type === 'mission_event') {
-        traceEvent(data);
+        liveEvent(data);
       }
       // Протокольные кадры самого SDK (CF_AGENT_*) сюда тоже прилетают —
       // молча пропускаются, у них нет поля "type" из наших значений.
@@ -2830,10 +2840,59 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     }
   }
 
+  /* Знаки уже показанных событий.
+     Одно событие приезжает двумя путями — живьём по сокету и вместе с
+     опросом из базы. Рисовать его дважды значит показывать работу,
+     которой не было. Знак присваивает база (см. event-store), он общий
+     для обоих каналов. */
+  var shownEvents = Object.create(null);
+
   function resetTrace() {
     $('trace').textContent = '';
     $('trace').classList.add('hidden');
+    shownEvents = Object.create(null);
     progressReset();
+  }
+
+  /* Событие из живого канала. Единственная разница с базой — форма уже
+     плоская, приводить нечего. */
+  function liveEvent(ev) {
+    if (ev.id) {
+      if (shownEvents[ev.id]) return;
+      shownEvents[ev.id] = true;
+    }
+    traceEvent(ev);
+  }
+
+  /* События из ответа опроса.
+     ЭТО ОСНОВНОЙ ПУТЬ, а не запасной. Карта миссии раньше жила ТОЛЬКО
+     на сокете, а сокет по умолчанию не подключён — человеку предлагали
+     сходить в «Живой журнал» и нажать «Подключить». Кто этого не делал,
+     видел десять минут крутящийся счётчик секунд и ни одного шага:
+     система работала, но молчала о том, что делает.
+
+     В базе события лежали всё это время, и опрос их даже забирал —
+     ответ /api/mission содержит поле events, — но здесь они молча
+     выбрасывались. Теперь опрос рисует их сам, и ход работы виден без
+     единого действия со стороны человека.
+
+     Форма в базе другая: строка {type, data}, а карте нужен плоский
+     объект {event, tool, ...}. Приведение здесь, а не в traceEvent:
+     живому каналу приводить нечего. */
+  function applyStoredEvents(list) {
+    if (!list || !list.length) return;
+    for (var i = 0; i < list.length; i++) {
+      var row = list[i];
+      if (!row || !row.type) continue;
+      if (row.id) {
+        if (shownEvents[row.id]) continue;
+        shownEvents[row.id] = true;
+      }
+      var data = row.data && typeof row.data === 'object' ? row.data : {};
+      var flat = { event: row.type };
+      for (var k in data) { if (Object.prototype.hasOwnProperty.call(data, k)) flat[k] = data[k]; }
+      traceEvent(flat);
+    }
   }
 
   // ─── Вложения ──────────────────────────────────────────────────────
