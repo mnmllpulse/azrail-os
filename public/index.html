@@ -1062,7 +1062,8 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       <input type="password" id="token" placeholder="AZRAIL_TOKEN" autocomplete="off">
       <button class="mini" id="tokenShowBtn" type="button" aria-label="Показать токен">👁</button>
       <button class="mini" id="tokenBtn">Сохранить</button>
-      <p class="note">Хранится только во вкладке браузера и стирается при её закрытии. Если не вставляется на телефоне — жми 👁: поле-пароль на части мобильных браузеров блокирует вставку, обычное текстовое — нет.</p>
+      <button class="mini" id="tokenForgetBtn" type="button">Забыть</button>
+      <p class="note">Сохранённый токен переживает перезагрузку и новые вкладки — «Забыть» стирает его с устройства. Если не вставляется на телефоне — жми 👁: поле-пароль на части мобильных браузеров блокирует вставку, обычное текстовое — нет.</p>
     </div>
 
     <div class="row">
@@ -1273,8 +1274,22 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
   var session = store('sessionStorage');
   var local = store('localStorage');
 
-  var token = session.get('azrail_token') || '';
-  var preferredModel = session.get('azrail_model') || '';
+  /* ТОКЕН ЖИВЁТ В localStorage, А НЕ В СЕССИИ.
+   *
+   * Раньше он лежал в sessionStorage: закрыл вкладку — ключ исчез. Замысел
+   * был про безопасность на чужом устройстве, а на деле каждая новая
+   * вкладка начиналась с отказов «нужен Authorization» на загрузке файлов
+   * и списке моделей. Выглядит это как сломанная система, а не как
+   * незаполненная настройка, и человек идёт чинить то, что не ломалось.
+   *
+   * Теперь решение принимает человек, а не система за него: рядом стоит
+   * «Забыть», которая стирает ключ явно.
+   *
+   * Значение из старой сессии переносится один раз, чтобы обновление
+   * страницы не выглядело как потеря настроек. */
+  var token = local.get('azrail_token') || session.get('azrail_token') || '';
+  if (token && !local.get('azrail_token')) local.set('azrail_token', token);
+  var preferredModel = local.get('azrail_model') || session.get('azrail_model') || '';
   var ticker = null;
 
   function api(path, opts) {
@@ -2335,8 +2350,22 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
   $('token').value = token;
   $('tokenBtn').addEventListener('click', function () {
     token = $('token').value.trim();
-    session.set('azrail_token', token);
+    local.set('azrail_token', token);
+    session.set('azrail_token', token); // старый ключ, чтобы не расходились
     toast(token ? 'Токен сохранён' : 'Токен очищен');
+    checkHealth();
+    /* Список моделей запрашивается один раз при открытии страницы. Без
+     * токена он падал и оставался «список не загрузился» НАВСЕГДА — даже
+     * когда причина уже устранена. Система знала, что проблема ушла, и
+     * продолжала показывать старую ошибку. */
+    if (token) loadModels();
+  });
+  $('tokenForgetBtn').addEventListener('click', function () {
+    token = '';
+    $('token').value = '';
+    local.set('azrail_token', '');
+    session.set('azrail_token', '');
+    toast('Токен стёрт с устройства');
     checkHealth();
   });
   $('tokenShowBtn').addEventListener('click', function () {
@@ -3073,6 +3102,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
      и человек будет видеть одну модель, а работать будет другая. */
   function setPreferredModel(slug) {
     preferredModel = slug || '';
+    local.set('azrail_model', preferredModel);
     session.set('azrail_model', preferredModel);
     $('model').value = preferredModel;
     ['modelSelect', 'chatModel'].forEach(function (id) {
