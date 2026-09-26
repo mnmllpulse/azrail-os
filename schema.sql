@@ -95,6 +95,22 @@ CREATE TABLE IF NOT EXISTS messages (
   FOREIGN KEY (conversation_id) REFERENCES conversations(id)
 );
 
+-- finished_at: момент завершения. Колонки не было, а код её записывал: каждая
+-- миссия падала бы на UPDATE с "no such column". Поймано сверкой SQL со
+-- схемой, а не тестами — tsc и vitest про имена колонок ничего не знают.
+--
+-- result_json: итог миссии (TaskResult в JSON). Появился вместе с переносом
+-- миссии в фон: POST возвращается до начала работы, и результат больше
+-- некуда положить в ответ. На УЖЕ РАЗВЁРНУТОЙ базе колонки нет — применить
+-- migrations/002-mission-async.sql. Код без неё не падает, но отчёт
+-- остаётся без итогового текста.
+--
+-- Оба комментария вынесены НАД CREATE TABLE, а не между колонками: node:sqlite
+-- (DatabaseSync, используется в tests/stubs/sqlite-d1.ts) при ALTER TABLE ...
+-- DROP COLUMN переписывает исходный текст CREATE TABLE и ломается на
+-- "incomplete input", если многострочный комментарий стоит прямо перед
+-- удаляемой колонкой. Проверено эмпирически: без межколоночных комментариев
+-- DROP COLUMN проходит; с ними — нет, независимо от языка и длины строки.
 CREATE TABLE IF NOT EXISTS missions (
   id TEXT PRIMARY KEY,
   project_id TEXT,
@@ -105,15 +121,7 @@ CREATE TABLE IF NOT EXISTS missions (
   progress INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  -- Момент завершения. Колонки не было, а код её записывал: каждая миссия
-  -- падала бы на UPDATE с "no such column". Поймано сверкой SQL со схемой,
-  -- а не тестами — tsc и vitest про имена колонок ничего не знают.
   finished_at TEXT,
-  -- Итог миссии (TaskResult в JSON). Появился вместе с переносом миссии в
-  -- фон: POST возвращается до начала работы, и результат больше некуда
-  -- положить в ответ. На УЖЕ РАЗВЁРНУТОЙ базе колонки нет — применить
-  -- migrations/002-mission-async.sql. Код без неё не падает, но отчёт
-  -- остаётся без итогового текста.
   result_json TEXT
 );
 
