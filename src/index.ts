@@ -42,6 +42,8 @@ import { runBench } from "./bench/runner";
 import { listRuns, loadOutcomes, saveRun } from "./bench/store";
 import { runInContainer, detectBackend } from "./core/sandbox";
 import { syncWorkspaceToSandbox } from "./core/workspace-sync";
+import { normalizeAzrailRequest } from "./protocol/facade";
+import { createProject as createProjectApi, getProject as getProjectApi, listProjects as listProjectsApi, updateProject as updateProjectApi } from "./lib/projects-api";
 
 export { Orchestrator };
 
@@ -83,6 +85,10 @@ function json(data: unknown, env: Env, status = 200): Response {
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+    // Pulse Shell speaks through /api/azrail/*, but the mature runtime keeps
+    // the original route names. Normalize BEFORE auth/idempotency/rate-limit
+    // so the facade cannot become a second, weaker execution path.
+    request = normalizeAzrailRequest(request);
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: getCors(env) });
     }
@@ -311,7 +317,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         "/api/mission": 0, // считается ниже по maxIterations
       };
       // Bound actual streamed bytes before parsing or cloning, not only Content-Length.
-      if (request.method === "POST" && url.pathname !== "/api/upload") {
+      if (["POST", "PATCH", "PUT"].includes(request.method) && url.pathname !== "/api/upload") {
         try {
           const bytes = await readBoundedBody(request, MAX_TASK_BODY_BYTES);
           const raw = bytes.length ? new TextDecoder().decode(bytes) : "{}";
@@ -346,6 +352,51 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
             env,
             429,
           );
+        }
+      }
+    }
+
+    // ─── Project-first API ───────────────────────────────────────────
+    // Новый Pulse Shell начинает с проекта, а не с разрозненных миссий.
+    // Эти маршруты используют существующую таблицу projects и тот же
+    // resource_owners boundary — второй project store не создаётся.
+    if (url.pathname === "/api/projects" && request.method === "GET") {
+      return json({ success: true, projects: await listProjectsApi(env, principal) }, env);
+    }
+
+    if (url.pathname === "/api/projects" && request.method === "POST") {
+      try {
+        const project = await createProjectApi(env, principal, parsedBody);
+        return json({ success: true, project }, env, 201);
+      } catch (err) {
+        if (err instanceof TypeError) return json({ error: err.message }, env, 400);
+        throw err;
+      }
+    }
+
+    const projectRoute = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
+    if (projectRoute) {
+      let projectId: string;
+      try {
+        projectId = decodeURIComponent(projectRoute[1]);
+      } catch {
+        return json({ error: "Некорректный projectId." }, env, 400);
+      }
+
+      if (request.method === "GET") {
+        const project = await getProjectApi(env, principal, projectId);
+        return project
+          ? json({ success: true, project }, env)
+          : json({ error: "Проект не найден." }, env, 404);
+      }
+
+      if (request.method === "PATCH") {
+        try {
+          const project = await updateProjectApi(env, principal, projectId, parsedBody);
+          return json({ success: true, project }, env);
+        } catch (err) {
+          if (err instanceof TypeError) return json({ error: err.message }, env, 400);
+          throw err;
         }
       }
     }
