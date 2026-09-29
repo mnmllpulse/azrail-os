@@ -18,7 +18,12 @@
     "smoke": "node scripts/smoke.mjs",
     "build:ui": "node scripts/build-ultimate.mjs",
     "predeploy": "npm run build:ui && npm run build:pulse",
-    "build:pulse": "node scripts/build-pulse.mjs"
+    "build:pulse": "node scripts/build-pulse.mjs",
+    "staging:check": "node scripts/check-staging.mjs",
+    "build:staging": "npm run staging:check && npm run build:ui && npm run build:pulse && wrangler deploy --dry-run --config wrangler.staging.toml",
+    "db:migrate:staging:plan": "node scripts/migrate.mjs --remote --config wrangler.staging.toml",
+    "db:migrate:staging:apply": "node scripts/migrate.mjs --remote --apply --config wrangler.staging.toml",
+    "deploy:staging": "npm run staging:check && npm run build:ui && npm run build:pulse && wrangler deploy --config wrangler.staging.toml"
   },
   "dependencies": {
     "@cloudflare/sandbox": "0.12.9",
