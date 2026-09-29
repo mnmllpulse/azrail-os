@@ -14,52 +14,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  runner:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - run: echo "runner-ok"
-      - run: uname -a
-      - run: node --version || true
-
-  checkout:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - run: echo "checkout-ok"
-
-  setup-node:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - run: node --version
-
-  install:
-    needs: [checkout, setup-node]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-
   verify:
-    needs: install
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-      - run: npm run check
-      - run: npm run build:check
+
+      - name: Install
+        run: npm ci
+
+      - name: Build UI
+        run: |
+          npm run build:ui
+          npm run build:pulse
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Wrangler dry run
+        run: npm run build:check
