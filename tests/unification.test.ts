@@ -249,3 +249,40 @@ describe("SYSTEM observability drawer", () => {
     expect(shell).not.toContain('id="capabilitiesPanel"');
   });
 });
+
+
+describe("Cloudflare staging isolation", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const example = fs.readFileSync(path.join(root, "wrangler.staging.example.toml"), "utf8");
+  const preflight = fs.readFileSync(path.join(root, "scripts/staging-preflight.mjs"), "utf8");
+  const gitignore = fs.readFileSync(path.join(root, ".gitignore"), "utf8");
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+
+  it("не использует production resource IDs в staging template", () => {
+    expect(example).not.toContain("c76e7d92-648c-45bc-b0df-f26b00d0ff88");
+    expect(example).not.toContain("dab3b792264f4d9cbec5d637d4f8d71e");
+    expect(example).toContain('name = "azrail-os-staging"');
+    expect(example).toContain('database_name = "azrail-db-staging"');
+    expect(example).toContain('bucket_name = "azrail-artifacts-staging"');
+    expect(example).toContain('AZRAIL_FORCE_FREE = "true"');
+  });
+
+  it("preflight блокирует production IDs и незаполненные placeholders", () => {
+    expect(preflight).toContain("REPLACE_WITH_STAGING_");
+    expect(preflight).toContain("c76e7d92-648c-45bc-b0df-f26b00d0ff88");
+    expect(preflight).toContain("dab3b792264f4d9cbec5d637d4f8d71e");
+    expect(preflight).toContain("Staging preflight отказан");
+  });
+
+  it("не позволяет случайно закоммитить реальный staging config", () => {
+    expect(gitignore).toContain("wrangler.staging.toml");
+  });
+
+  it("имеет отдельные check / migration / deploy / smoke commands", () => {
+    expect(pkg.scripts["staging:check"]).toBeTruthy();
+    expect(pkg.scripts["staging:migrate:plan"]).toBeTruthy();
+    expect(pkg.scripts["staging:migrate:apply"]).toBeTruthy();
+    expect(pkg.scripts["staging:deploy"]).toBeTruthy();
+    expect(pkg.scripts["staging:smoke"]).toBeTruthy();
+  });
+});
