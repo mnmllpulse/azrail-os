@@ -4,6 +4,8 @@ import type { Env, QaAgentState, TaskRequest, TaskResult, QaOperation } from "..
 import { readSource } from "../lib/source-reader";
 import { rememberFact } from "../lib/memory-agent";
 import { assertRepo, pathSegment, UnsafePathError } from "../lib/safe-path";
+import { requireCapability } from "../lib/project-control";
+import { AccessError } from "../lib/accounts";
 
 /**
  * QA AGENT
@@ -60,6 +62,19 @@ export class QaAgent extends Agent<Env, QaAgentState> {
 
     if (op.type === "coverage_gaps") {
       return this.coverageGaps(request);
+    }
+
+    try {
+      await requireCapability(this.env, request.projectId, "qa");
+    } catch (err) {
+      if (err instanceof AccessError) {
+        return {
+          status: "needs_input",
+          agent: "qa-agent",
+          summary: err.message,
+        };
+      }
+      throw err;
     }
 
     // Остальные операции идут в GitHub Actions
