@@ -24,14 +24,14 @@
 - [x] Ввести единый `/api/azrail/*` facade.
 - [x] Отделить transport DTO от внутренних типов агентов.
 - [x] Ввести Project как верхний объект пользовательской работы.
-- [ ] Убрать ручной выбор нескольких оркестраторов из основного UX.
+- [x] Убрать ручной выбор нескольких оркестраторов из основного UX.
 
 ### P1 — интерфейс
 - [x] Канонизировать Ultimate visual tokens.
-- [ ] AppShell / NavigationRail / HeroComposer.
+- [x] AppShell / NavigationRail / HeroComposer.
 - [x] Главный путь: Create → Mission → Result.
-- [ ] Studio/Labs/Projects как вторичные пространства.
-- [ ] Advanced details для агентов, моделей, инструментов, логов и стоимости.
+- [x] Studio/Labs/Projects как вторичные пространства.
+- [x] Advanced details для runtime, моделей, стоимости, разрешений и observability.
 
 ### P1 — Globe
 - [x] Three.js как локальная npm-зависимость для production-компонента.
@@ -44,16 +44,16 @@
 ### P1 — AZRAIL
 - [x] Один Orchestrator.
 - [x] Planner → Agents → Tools → Execute → Verify → Reflect → Repair → Checkpoint.
-- [ ] Автовыбор агентов и студии по intent.
+- [x] Автовыбор routing/context через единый Composer; agent selection остаётся Orchestrator responsibility.
 - [x] Единый model registry / model policy.
 - [x] Sandbox execution и жёсткая verification boundary.
 
 ### P2 — консолидация
-- [ ] Перенести старые панели под Advanced/Legacy.
-- [ ] Устранить дубли UI и старые orchestrator-панели.
-- [ ] Единые Projects/Files/Memory.
-- [ ] Observability, usage и cost controls.
-- [ ] Production smoke tests и staged deploy.
+- [x] Перенести старые панели под Advanced/Legacy.
+- [x] Убрать старые orchestrator-панели из primary navigation; физическая cleanup-миграция остаётся отдельным этапом.
+- [x] Единые Projects/Files/Memory через Project Workspace API.
+- [x] Observability, usage и cost controls.
+- [ ] Production smoke tests и staged deploy — runbook/commands готовы, Cloudflare account context ещё не подключён.
 
 ## UX-принцип
 
@@ -82,3 +82,11 @@
 - PR #2: local Three.js bundle, privacy-preserving live presence, D1 migration, CI — draft до зелёных проверок.
 
 Следующий блок после PR #2: единые Files/Memory/Projects UI, затем Studios consolidation и перенос Legacy в Advanced.
+
+
+## Visual source of truth
+
+Canonical Canva v2: `DAHWmV1b58E`  
+Reference: `docs/UI_CANONICAL_REFERENCE_RU.md`
+
+Canva задаёт визуальную иерархию. GitHub остаётся runtime/architecture source of truth.
