@@ -9,3 +9,6 @@ coverage/
 .dev.vars
 .work/
 backups/
+
+# Account-specific staging bindings. Commit only the .example template.
+wrangler.staging.toml
