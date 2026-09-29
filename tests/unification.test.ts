@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { canonicalApiPath } from "../src/protocol/facade";
 import { validateProjectDescription, validateProjectName } from "../src/lib/projects-api";
 
@@ -38,8 +40,6 @@ describe("Project-first input validation", () => {
 
 
 describe("Pulse Shell security invariants", () => {
-  const fs = require("node:fs");
-  const path = require("node:path");
   const root = path.resolve(import.meta.dirname, "..");
   const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
   const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
