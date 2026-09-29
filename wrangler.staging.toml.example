@@ -43,6 +43,7 @@ AZRAIL_MISSION_BUDGET_USD = "0.25"
 AZRAIL_WRITE_BUDGET = "1000"
 AZRAIL_HOURLY_LIMIT = "20"
 AZRAIL_MISSION_STALE_MINUTES = "20"
+AZRAIL_ALLOW_PRODUCTION_DEPLOY = "false"
 
 # Same-origin UI works with this sentinel. Replace after first deploy if a
 # separate origin must call the staging API.
