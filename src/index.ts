@@ -693,6 +693,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         goal += attachmentsToText(await loadAttachments(env, body.attachments));
       }
 
+      const missionId = crypto.randomUUID();
+      const studioRoute = routeStudio(goal, normalizePreferredStudio(body.preferredStudio));
+      const requestedMode = normalizeRoutingMode(body.preferredMode);
+      const preferredMode = requestedMode === "auto" ? modeForStudio(studioRoute.studio) : requestedMode;
+      const maxIterations = clampIterations(body.maxIterations ?? defaultIterationsForMode(preferredMode));
+
       /* Бюджет записей — до начала работы, не после.
        *
        * Cloudflare не даёт жёсткого потолка расходов: о превышении
@@ -704,7 +710,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
        * невозможна. Она нужна ровно с того дня, когда план станет
        * платным, и поставить её надо ДО этого дня.
        */
-      const budget = await chargeWrites(env, estimateMissionWrites(clampIterations(body.maxIterations)));
+      const budget = await chargeWrites(env, estimateMissionWrites(maxIterations));
       // Остаток уходит в ответ: интерфейс должен показать приближение к
       // потолку ЗАРАНЕЕ, а не сообщить об упоре в него постфактум.
       if (!budget.allowed) {
@@ -724,11 +730,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
        * от самого клиента — раньше каждый из этих случаев стоил ещё
        * одного полного прогона моделей, и заметить это можно было только
        * по счёту. Ключ необязателен: без него поведение прежнее. */
-      const missionId = crypto.randomUUID();
-      const studioRoute = routeStudio(goal, normalizePreferredStudio(body.preferredStudio));
-      const requestedMode = normalizeRoutingMode(body.preferredMode);
-      const preferredMode = requestedMode === "auto" ? modeForStudio(studioRoute.studio) : requestedMode;
-      const maxIterations = clampIterations(body.maxIterations ?? defaultIterationsForMode(preferredMode));
+
 
       // Эта запись ОБЯЗАНА пройти, и падать здесь правильно: без строки в
       // missions миссию нечем отслеживать и не к чему привязать события.
