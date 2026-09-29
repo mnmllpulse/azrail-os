@@ -102,3 +102,28 @@ describe("Pulse Globe production boundary", () => {
     expect(source).toContain('pulse:globe-ready');
   });
 });
+
+
+describe("Project Workspace shell", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+  const api = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+
+  it("использует единый workspace endpoint", () => {
+    expect(client).toContain("/workspace");
+    expect(api).toContain("loadProjectWorkspace");
+    expect(api).toMatch(/\/api\\\/projects\\\/\(\[\^\/\]\+\)\\\/workspace/);
+  });
+
+  it("не вставляет данные проекта через innerHTML", () => {
+    expect(client).not.toContain(".innerHTML");
+    expect(client).toContain("textContent");
+    expect(shell).toContain('id="projectsPanel"');
+  });
+
+  it("переключение проекта меняет канонический project id", () => {
+    expect(client).toContain("cached('azrail_pulse_project',project)");
+    expect(client).toContain("heartbeatPresence()");
+  });
+});
