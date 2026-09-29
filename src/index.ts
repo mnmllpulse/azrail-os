@@ -44,7 +44,10 @@ import { runInContainer, detectBackend } from "./core/sandbox";
 import { syncWorkspaceToSandbox } from "./core/workspace-sync";
 import { normalizeAzrailRequest } from "./protocol/facade";
 import { defaultIterationsForMode, normalizeRoutingMode } from "./lib/routing-mode";
+import { modeForStudio, normalizePreferredStudio, routeStudio } from "./lib/studio-router";
 import { createProject as createProjectApi, getProject as getProjectApi, listProjects as listProjectsApi, updateProject as updateProjectApi } from "./lib/projects-api";
+import { heartbeatPresence, listPresence } from "./lib/presence";
+import { loadProjectWorkspace } from "./lib/project-workspace";
 
 export { Orchestrator };
 
@@ -86,6 +89,7 @@ function json(data: unknown, env: Env, status = 200): Response {
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+    const requestCf = ((request as Request & { cf?: Record<string, unknown> }).cf ?? {});
     // Pulse Shell speaks through /api/azrail/*, but the mature runtime keeps
     // the original route names. Normalize BEFORE auth/idempotency/rate-limit
     // so the facade cannot become a second, weaker execution path.
@@ -374,6 +378,29 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       }
     }
 
+    // ─── Pulse Globe presence ─────────────────────────────────────────
+    // Heartbeat is authenticated and intentionally stores only coarse
+    // regional coordinates from Cloudflare request metadata.
+    if (url.pathname === "/api/presence" && request.method === "POST") {
+      try {
+        const heartbeat = await heartbeatPresence(env, principal, requestCf, parsedBody);
+        return json({ success: true, heartbeat }, env);
+      } catch (err) {
+        if (err instanceof TypeError) return json({ error: err.message }, env, 400);
+        throw err;
+      }
+    }
+
+    if (url.pathname === "/api/presence" && request.method === "GET") {
+      const sessionId = url.searchParams.get("sessionId") ?? "";
+      const projectId = url.searchParams.get("projectId") ?? undefined;
+      return json({
+        success: true,
+        sessions: await listPresence(env, principal, sessionId, projectId),
+        precision: "regional",
+      }, env);
+    }
+
     // ─── Project-first API ───────────────────────────────────────────
     // Новый Pulse Shell начинает с проекта, а не с разрозненных миссий.
     // Эти маршруты используют существующую таблицу projects и тот же
@@ -419,6 +446,28 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       }
     }
 
+    const workspaceRoute = url.pathname.match(/^\/api\/projects\/([^/]+)\/workspace$/);
+    if (workspaceRoute && request.method === "GET") {
+      let projectId: string;
+      try {
+        projectId = decodeURIComponent(workspaceRoute[1]);
+      } catch {
+        return json({ error: "Некорректный projectId." }, env, 400);
+      }
+      await requireResource(env, principal, "project", projectId);
+      const snapshot = await loadProjectWorkspace(env, projectId);
+      const orchestrator = await getAgentByName(env.Orchestrator, projectId);
+      const history = await orchestrator.getHistory(projectId, 20);
+      return json({
+        success: true,
+        projectId,
+        files: snapshot.files,
+        memory: snapshot.memory,
+        versions: snapshot.versions,
+        history,
+      }, env);
+    }
+
     if (url.pathname === "/api/routing-settings" && request.method === "GET") {
       const policy = await readModelPolicy(env);
       const month = `paid-month:${new Date().toISOString().slice(0,7)}`;
@@ -460,6 +509,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     if(url.pathname === "/api/metrics" && request.method === "GET") {
       const project=url.searchParams.get("projectId");
       if(!project)return json({error:"projectId обязателен."},env,400);
+      await requireResource(env,principal,"project",project);
       const missions=await env.AZRAIL_D1.prepare("SELECT status,COUNT(*) AS count FROM missions WHERE project_id=? GROUP BY status").bind(project).all();
       const calls=await env.AZRAIL_D1.prepare("SELECT COUNT(*) AS calls,SUM(prompt_tokens) AS input_tokens,SUM(completion_tokens) AS output_tokens,SUM(actual_micro_usd) AS measured_micro_usd,SUM(CASE WHEN actual_micro_usd IS NULL THEN 1 ELSE 0 END) AS unknown_cost_calls,AVG(finished_at-started_at) AS mean_ms FROM model_calls WHERE scope=? OR scope IN (SELECT 'mission:'||id FROM missions WHERE project_id=?)").bind(`project:${project}`,project).first();
       return json({missions:missions.results,models:calls,metering:env.AZRAIL_METERING??"off"},env);
@@ -631,6 +681,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         maxIterations?: number;
         preferredModel?: string;
         preferredMode?: unknown;
+        preferredStudio?: unknown;
         attachments?: AttachmentRef[];
       };
       let goal = body.message?.trim();
@@ -644,6 +695,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         goal += attachmentsToText(await loadAttachments(env, body.attachments));
       }
 
+      const missionId = crypto.randomUUID();
+      const studioRoute = routeStudio(goal, normalizePreferredStudio(body.preferredStudio));
+      const requestedMode = normalizeRoutingMode(body.preferredMode);
+      const preferredMode = requestedMode === "auto" ? modeForStudio(studioRoute.studio) : requestedMode;
+      const maxIterations = clampIterations(body.maxIterations ?? defaultIterationsForMode(preferredMode));
+
       /* Бюджет записей — до начала работы, не после.
        *
        * Cloudflare не даёт жёсткого потолка расходов: о превышении
@@ -655,7 +712,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
        * невозможна. Она нужна ровно с того дня, когда план станет
        * платным, и поставить её надо ДО этого дня.
        */
-      const budget = await chargeWrites(env, estimateMissionWrites(clampIterations(body.maxIterations)));
+      const budget = await chargeWrites(env, estimateMissionWrites(maxIterations));
       // Остаток уходит в ответ: интерфейс должен показать приближение к
       // потолку ЗАРАНЕЕ, а не сообщить об упоре в него постфактум.
       if (!budget.allowed) {
@@ -675,15 +732,13 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
        * от самого клиента — раньше каждый из этих случаев стоил ещё
        * одного полного прогона моделей, и заметить это можно было только
        * по счёту. Ключ необязателен: без него поведение прежнее. */
-      const missionId = crypto.randomUUID();
-      const preferredMode = normalizeRoutingMode(body.preferredMode);
-      const maxIterations = clampIterations(body.maxIterations ?? defaultIterationsForMode(preferredMode));
+
 
       // Эта запись ОБЯЗАНА пройти, и падать здесь правильно: без строки в
       // missions миссию нечем отслеживать и не к чему привязать события.
       // Отказ ДО работы дешевле, чем осиротевший прогон, потративший модели.
       try {
-        if (!await createMission(env, missionId, body.projectId, goal, {maxIterations,preferredModel:body.preferredModel,preferredMode,publicHostname:url.hostname})) {
+        if (!await createMission(env, missionId, body.projectId, goal, {maxIterations,preferredModel:body.preferredModel,preferredMode,preferredStudio:studioRoute.studio,publicHostname:url.hostname})) {
           return json({error:"В проекте уже выполняется миссия. Дождитесь завершения или отмените её.", code:"project_busy"},env,409);
         }
       } catch (err) {
@@ -726,6 +781,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           maxIterations,
           preferredModel: body.preferredModel,
           preferredMode,
+          // Studio — это маршрут возможностей, не отдельный runtime.
+          preferredStudio: studioRoute.studio,
           // Хост берётся ИЗ ЗАПРОСА: на своём домене предпросмотр должен
           // вести на него же, а не на workers.dev. Внутри фоновой задачи
           // запроса уже нет — значит, передать надо сейчас.
@@ -749,6 +806,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           success: true,
           missionId,
           status: "accepted",
+          studio: studioRoute,
+          routingMode: preferredMode,
           budget: { used: budget.used, limit: budget.limit, remaining: budget.remaining },
         },
         env,
