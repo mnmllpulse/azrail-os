@@ -216,3 +216,36 @@ describe("Consolidation regressions", () => {
     expect(api.indexOf("const studioRoute = routeStudio")).toBeLessThan(api.indexOf("const budget = await chargeWrites"));
   });
 });
+
+
+describe("SYSTEM observability drawer", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+
+  const count = (text: string, needle: string) => text.split(needle).length - 1;
+
+  it("имеет ровно один SYSTEM drawer и один opener", () => {
+    expect(count(shell, 'id="systemPanel"')).toBe(1);
+    expect(count(shell, 'id="systemOpen"')).toBe(1);
+    expect(count(client, "async function openSystem(")).toBe(1);
+    expect(count(client, "$('systemOpen').addEventListener")).toBe(1);
+  });
+
+  it("показывает только реальные health / routing / project metrics", () => {
+    expect(client).toContain("fetch('/health'");
+    expect(client).toContain("/api/azrail/routing-settings");
+    expect(client).toContain("/api/azrail/metrics?projectId=");
+    expect(client).toContain("measured_micro_usd");
+    expect(client).toContain("unknown_cost_calls");
+  });
+
+  it("не вставляет runtime-данные через innerHTML", () => {
+    expect(client).not.toMatch(/innerHTML\s*=/);
+  });
+
+  it("не содержит старый удалённый master-detail Studio CSS", () => {
+    expect(shell).not.toContain(".catalog-body{");
+    expect(shell).not.toContain('id="capabilitiesPanel"');
+  });
+});
