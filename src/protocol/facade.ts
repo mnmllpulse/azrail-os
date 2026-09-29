@@ -16,6 +16,7 @@ const EXACT_ALIASES: Record<string, string> = {
   "/api/azrail/tools": "/api/tools",
   "/api/azrail/agents": "/api/agents",
   "/api/azrail/metrics": "/api/metrics",
+  "/api/azrail/observability": "/api/observability",
   "/api/azrail/chat": "/api/chat",
   "/api/azrail/conversations": "/api/conversations",
   "/api/azrail/upload": "/api/upload",
