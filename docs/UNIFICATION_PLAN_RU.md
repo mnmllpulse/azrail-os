@@ -1,7 +1,7 @@
 # DARK MNMLL PULSE OS × AZRAIL — план объединения
 
-Статус: integration branch.  
-Ветка: `integration/pulse-os-unification`.
+Статус: post-merge hardening.  
+Основная интеграция смержена в `main`; дальнейшая стабилизация идёт через `hardening/post-merge-stabilization`.
 
 ## Архитектурное решение
 
@@ -24,13 +24,13 @@
 - [x] Ввести единый `/api/azrail/*` facade.
 - [x] Отделить transport DTO от внутренних типов агентов.
 - [x] Ввести Project как верхний объект пользовательской работы.
-- [ ] Убрать ручной выбор нескольких оркестраторов из основного UX.
+- [x] Убрать ручной выбор нескольких оркестраторов из основного UX.
 
 ### P1 — интерфейс
 - [x] Канонизировать Ultimate visual tokens.
 - [ ] AppShell / NavigationRail / HeroComposer.
 - [x] Главный путь: Create → Mission → Result.
-- [ ] Studio/Labs/Projects как вторичные пространства.
+- [x] Studio/Labs/Projects как вторичные пространства.
 - [ ] Advanced details для агентов, моделей, инструментов, логов и стоимости.
 
 ### P1 — Globe
@@ -44,15 +44,15 @@
 ### P1 — AZRAIL
 - [x] Один Orchestrator.
 - [x] Planner → Agents → Tools → Execute → Verify → Reflect → Repair → Checkpoint.
-- [ ] Автовыбор агентов и студии по intent.
+- [x] Автовыбор агентов и студии по intent.
 - [x] Единый model registry / model policy.
 - [x] Sandbox execution и жёсткая verification boundary.
 
 ### P2 — консолидация
-- [ ] Перенести старые панели под Advanced/Legacy.
-- [ ] Устранить дубли UI и старые orchestrator-панели.
-- [ ] Единые Projects/Files/Memory.
-- [ ] Observability, usage и cost controls.
+- [x] Перенести старые панели под Advanced/Legacy.
+- [x] Устранить дубли UI и старые orchestrator-панели из основного UX.
+- [x] Единые Projects/Files/Memory.
+- [x] Read-only SYSTEM observability, usage и cost visibility.
 - [ ] Production smoke tests и staged deploy.
 
 ## UX-принцип
@@ -76,9 +76,9 @@
 
 ## Текущий статус
 
-Интеграция разбита на два PR, чтобы не смешивать архитектурный фундамент и productionization Globe.
-
-- PR #1: protocol, Project-first foundation, Pulse Shell, routing profiles — уже merged.
-- PR #2: local Three.js bundle, privacy-preserving live presence, D1 migration, CI — draft до зелёных проверок.
-
-Следующий блок после PR #2: единые Files/Memory/Projects UI, затем Studios consolidation и перенос Legacy в Advanced.
+- PR #1 — merged: protocol, Project-first foundation, Pulse Shell.
+- PR #2 — merged: production Globe, live presence, Projects/Files/Memory, Studio/Labs routing, CI workflow.
+- PR #3 — merged: idempotency admission hotfix.
+- GitHub Actions остаётся инфраструктурным blocker: jobs получают `runner_id: 0`, `runner_name: ""`, `steps: []`. Отслеживается в issue #9.
+- Следующий обязательный рубеж: восстановить runner → зелёный CI → D1 migration на staging → smoke tests → production.
+- После стабилизации: React-компонентизация AppShell/NavigationRail/HeroComposer и финальный visual polish.
