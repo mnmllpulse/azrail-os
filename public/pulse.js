@@ -384,8 +384,12 @@ async function openAdvanced(){
     const meta=knownProjects.find(p=>p.id===project);
     $('advancedProject').textContent=(meta?.name||project)+' · live project telemetry';
     $('advancedPanel').hidden=false;
-    const d=await api('/api/azrail/observability?projectId='+encodeURIComponent(project));
+    const [d, permissionData]=await Promise.all([
+      api('/api/azrail/observability?projectId='+encodeURIComponent(project)),
+      api('/api/azrail/projects/'+encodeURIComponent(project)+'/permissions'),
+    ]);
     const o=d.observability||{};
+    const permissions=permissionData.capabilities||{};
     const models=o.models||{}, budgets=o.budgets||{}, runtime=o.runtime||{}, routing=o.routing||{};
     $('obsCalls').textContent=String(models.calls||0);
     $('obsLatency').textContent=String(models.meanLatencyMs||0)+' ms';
@@ -397,6 +401,10 @@ async function openAdvanced(){
       ['Metering',runtime.metering||'off'],
       ['AI Gateway',runtime.gatewayConfigured?'configured':'not configured'],
       ['Third-party models',routing.allowThirdPartyModels?'enabled':'disabled'],
+      ['Git capability',permissions.git?'enabled':'blocked'],
+      ['Deploy capability',permissions.deploy?'enabled':'blocked'],
+      ['Sandbox capability',permissions.sandbox?'enabled':'blocked'],
+      ['QA capability',permissions.qa?'enabled':'blocked'],
       ['Policy revision',routing.revision??0],
     ]);
 
