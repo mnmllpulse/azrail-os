@@ -446,6 +446,21 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       }
     }
 
+    const permissionsRoute = url.pathname.match(/^\/api\/projects\/([^/]+)\/permissions$/);
+    if (permissionsRoute && request.method === "GET") {
+      let projectId: string;
+      try {
+        projectId = decodeURIComponent(permissionsRoute[1]);
+      } catch {
+        return json({ error: "Некорректный projectId." }, env, 400);
+      }
+      return json({
+        success: true,
+        projectId,
+        capabilities: await listProjectCapabilities(env, projectId),
+      }, env);
+    }
+
     const workspaceRoute = url.pathname.match(/^\/api\/projects\/([^/]+)\/workspace$/);
     if (workspaceRoute && request.method === "GET") {
       let projectId: string;
