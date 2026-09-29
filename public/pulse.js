@@ -271,7 +271,7 @@ $('composer').addEventListener('submit',async e=>{
   if(!token){openAccess('Сначала подключите AZRAIL.');return;}
   setBusy(true);notice('Создаю проект и передаю задачу AZRAIL…');
   try{const projectId=await ensureProject(message);const key=uuid();const d=await api('/api/azrail/mission',{method:'POST',key,body:{message,projectId,preferredMode:mode,preferredStudio:studioHint||undefined}});
-    mission=d.missionId;cached('azrail_pulse_mission',mission);studioHint='';$('mission').hidden=false;$('missionTitle').textContent=message;$('missionState').textContent='ACCEPTED';
+    mission=d.missionId;cached('azrail_pulse_mission',mission);if(d.budget)cached('azrail_pulse_write_budget',JSON.stringify(d.budget));studioHint='';$('mission').hidden=false;$('missionTitle').textContent=message;$('missionState').textContent='ACCEPTED';
     const routed=d.studio?.studio&&d.studio.studio!=='auto'?' · '+d.studio.studio.toUpperCase():'';
     notice('Задача принята'+routed+'. AZRAIL продолжит работу независимо от открытой страницы.');poll();
   }catch(e){setBusy(false);if(e.status===401)openAccess(e.message);else notice(e.message);}
