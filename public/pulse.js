@@ -7,6 +7,7 @@ let token=cached('azrail_ultimate_token');
 let project=cached('azrail_pulse_project');
 let mission=cached('azrail_pulse_mission');
 let timer=null,busy=false;
+let mode=cached('azrail_pulse_mode')||'auto';
 const labels={accepted:'Принято',queued:'В очереди',planning:'Планирование',executing:'Выполнение',verifying:'Проверка',checking:'Проверка',repairing:'Исправление',waiting_approval:'Нужно решение',completed:'Готово',done:'Готово',failed:'Ошибка',cancelled:'Остановлено'};
 function notice(t){$('notice').textContent=t||'';}
 function headers(json,key){const h={Authorization:'Bearer '+token};if(json)h['Content-Type']='application/json';if(key)h['Idempotency-Key']=key;return h;}
@@ -22,6 +23,16 @@ async function api(path,opt={}){
 function openAccess(msg){$('access').hidden=false;$('accessKey').value=token;$('accessNotice').textContent=msg||'';$('accessKey').focus();}
 function closeAccess(){$('access').hidden=true;}
 function setBusy(v){busy=v;$('createButton').disabled=v;$('idea').readOnly=v;}
+function setMode(next){
+  mode=next||'auto';cached('azrail_pulse_mode',mode);
+  for(const b of document.querySelectorAll('[data-mode]'))b.classList.toggle('active',b.dataset.mode===mode);
+}
+function setProgress(status){
+  const stage=status==='completed'||status==='done'?4:status==='verifying'||status==='checking'?3:status==='executing'||status==='repairing'?2:status==='planning'?1:0;
+  for(const el of document.querySelectorAll('#progress .step')){
+    const n=Number(el.dataset.stage);el.classList.toggle('done',n<stage);el.classList.toggle('active',n===stage);
+  }
+}
 async function connect(){
   const candidate=$('accessKey').value.trim();if(!candidate){$('accessNotice').textContent='Введите ключ доступа.';return;}
   const previous=token;token=candidate;
@@ -43,7 +54,7 @@ async function ensureProject(message){
 function renderMission(d){
   $('mission').hidden=false;const m=d.mission||{};
   $('missionTitle').textContent=m.goal||m.title||'AZRAIL mission';
-  $('missionState').textContent=(labels[m.status]||m.status||'WORKING').toUpperCase();
+  $('missionState').textContent=(labels[m.status]||m.status||'WORKING').toUpperCase();setProgress(m.status);
   const list=$('missionSteps');list.replaceChildren();
   for(const step of d.plan||[]){const li=document.createElement('li');li.textContent=(step.title||'Шаг')+' · '+(labels[step.status]||step.status||'');list.append(li);}
   const r=d.result;$('missionResult').textContent=typeof r==='string'?r:[r?.summary,r?.error,Array.isArray(r?.questions)?r.questions.join('\n'):null].filter(Boolean).join('\n\n');
@@ -60,11 +71,13 @@ $('composer').addEventListener('submit',async e=>{
   e.preventDefault();if(busy)return;const message=$('idea').value.trim();if(!message){notice('Опишите результат, который нужно получить.');return;}
   if(!token){openAccess('Сначала подключите AZRAIL.');return;}
   setBusy(true);notice('Создаю проект и передаю задачу AZRAIL…');
-  try{const projectId=await ensureProject(message);const key=uuid();const d=await api('/api/azrail/mission',{method:'POST',key,body:{message,projectId,maxIterations:8}});
+  try{const projectId=await ensureProject(message);const key=uuid();const d=await api('/api/azrail/mission',{method:'POST',key,body:{message,projectId,preferredMode:mode}});
     mission=d.missionId;cached('azrail_pulse_mission',mission);$('mission').hidden=false;$('missionTitle').textContent=message;$('missionState').textContent='ACCEPTED';
     notice('Задача принята. AZRAIL продолжит работу независимо от открытой страницы.');poll();
   }catch(e){setBusy(false);if(e.status===401)openAccess(e.message);else notice(e.message);}
 });
+for(const b of document.querySelectorAll('[data-mode]'))b.addEventListener('click',()=>setMode(b.dataset.mode));
+setMode(mode);
 $('accessConnect').addEventListener('click',connect);
 $('accessClose').addEventListener('click',closeAccess);
 $('accessKey').addEventListener('keydown',e=>{if(e.key==='Enter')connect();});
