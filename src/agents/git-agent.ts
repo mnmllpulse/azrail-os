@@ -1,6 +1,8 @@
 import { withBillingScope, projectBillingScope } from "../lib/billing-context";
 import { Agent } from "agents";
 import { assertRepo, pathSegments, UnsafePathError } from "../lib/safe-path";
+import { requireCapability } from "../lib/project-control";
+import { AccessError } from "../lib/accounts";
 import type { Env, GitAgentState, TaskRequest, TaskResult, GitOperation } from "../types";
 
 // ВАЖНО про источник знаний: формы ответов GitHub REST API взяты по знанию API,
@@ -48,6 +50,19 @@ export class GitAgent extends Agent<Env, GitAgentState> {
 
   private async runScoped(request: TaskRequest): Promise<TaskResult> {
     this.setState({ lastRunAt: new Date().toISOString() });
+
+    try {
+      await requireCapability(this.env, request.projectId, "git");
+    } catch (err) {
+      if (err instanceof AccessError) {
+        return {
+          status: "needs_input",
+          agent: "git-agent",
+          summary: err.message,
+        };
+      }
+      throw err;
+    }
 
     if (!this.env.GITHUB_TOKEN) {
       return {
