@@ -10,11 +10,9 @@ let timer=null,busy=false,presenceTimer=null,globeReady=false;
 const presenceSession=cached('azrail_pulse_presence')||('s_'+uuid().replaceAll('-',''));
 cached('azrail_pulse_presence',presenceSession);
 let mode=cached('azrail_pulse_mode')||'auto';
-let projectsCache=[];
 let knownProjects=[];
-let studioRegistry=[];
-let activeCapability=null;
 let studioCatalogData=null;
+let studioHint='';
 const labels={accepted:'Принято',queued:'В очереди',planning:'Планирование',executing:'Выполнение',verifying:'Проверка',checking:'Проверка',repairing:'Исправление',waiting_approval:'Нужно решение',completed:'Готово',done:'Готово',failed:'Ошибка',cancelled:'Остановлено'};
 function notice(t){$('notice').textContent=t||'';}
 function headers(json,key){const h={Authorization:'Bearer '+token};if(json)h['Content-Type']='application/json';if(key)h['Idempotency-Key']=key;return h;}
@@ -85,117 +83,6 @@ async function ensureProject(message){
   const existing=await ensureProjectList();if(existing)return existing;
   const d=await api('/api/azrail/projects',{method:'POST',body:{name:projectNameFrom(message)}});
   project=d.project.id;cached('azrail_pulse_project',project);heartbeatPresence();return project;
-}
-
-function clearNode(node){while(node.firstChild)node.removeChild(node.firstChild);}
-function projectRow(title,detail){
-  const row=document.createElement('div');row.className='workspace-row';
-  const b=document.createElement('b');b.textContent=title||'—';row.appendChild(b);
-  if(detail){const span=document.createElement('span');span.textContent=detail;row.appendChild(span);}
-  return row;
-}
-function renderCollection(id,items,mapper){
-  const root=$(id);clearNode(root);
-  if(!Array.isArray(items)||!items.length){const empty=document.createElement('div');empty.className='workspace-empty';empty.textContent='Пока пусто.';root.appendChild(empty);return;}
-  for(const item of items.slice(0,30)){const [title,detail]=mapper(item);root.appendChild(projectRow(title,detail));}
-}
-function renderProjectList(){
-  const root=$('projectList');clearNode(root);
-  if(!projectsCache.length){const empty=document.createElement('div');empty.className='workspace-empty';empty.textContent='Проектов пока нет.';root.appendChild(empty);return;}
-  for(const item of projectsCache){
-    const button=document.createElement('button');button.type='button';button.className='project-item'+(item.id===project?' active':'');
-    const b=document.createElement('b');b.textContent=item.name||item.id;button.appendChild(b);
-    const meta=document.createElement('span');meta.textContent=(item.status||'active')+' · '+(item.updatedAt||'');button.appendChild(meta);
-    button.addEventListener('click',()=>selectProject(item.id));
-    root.appendChild(button);
-  }
-}
-async function loadWorkspace(projectId){
-  if(!projectId)return;
-  $('projectTitle').textContent='Загрузка…';$('projectDescription').textContent='Читаю Project Workspace.';
-  try{
-    const d=await api('/api/azrail/projects/'+encodeURIComponent(projectId)+'/workspace');
-    const info=projectsCache.find(p=>p.id===projectId);
-    $('projectTitle').textContent=info?.name||projectId;
-    $('projectDescription').textContent=info?.description||'Единое пространство файлов, памяти, версий и истории.';
-    const files=Array.isArray(d.files?.files)?d.files.files:[];
-    const memory=Array.isArray(d.memory)?d.memory:[];
-    const versions=Array.isArray(d.versions)?d.versions:[];
-    const history=Array.isArray(d.history)?d.history:[];
-    $('filesCount').textContent=String(files.length)+(d.files?.truncated?'+':'');
-    $('memoryCount').textContent=String(memory.length);
-    $('versionsCount').textContent=String(versions.length);
-    $('historyCount').textContent=String(history.length);
-    renderCollection('projectFiles',files,x=>[x.path,typeof x.size==='number'?Math.round(x.size/1024)+' KB':'']);
-    renderCollection('projectMemory',memory,x=>[x.key,'['+(x.category||'memory')+'] '+(x.value||'')]);
-    renderCollection('projectVersions',versions,x=>['v'+(x.versionNumber??'?'),[x.summary,x.createdByAgent,x.createdAt].filter(Boolean).join(' · ')]);
-    renderCollection('projectHistory',history,x=>[x.intent||x.agent||'Task',[x.status,x.agent,x.output_summary||x.error,x.started_at].filter(Boolean).join(' · ')]);
-  }catch(e){
-    $('projectTitle').textContent='Project Workspace недоступен';
-    $('projectDescription').textContent=e.message;
-  }
-}
-async function selectProject(id){
-  project=id;cached('azrail_pulse_project',project);mission='';cached('azrail_pulse_mission','');
-  renderProjectList();heartbeatPresence();await loadWorkspace(project);
-}
-async function openProjects(){
-  if(!token){openAccess('Подключите AZRAIL, чтобы открыть проекты.');return;}
-  $('projectsPanel').hidden=false;
-  try{await ensureProjectList();renderProjectList();if(project)await loadWorkspace(project);}
-  catch(e){if(e.status===401){$('projectsPanel').hidden=true;openAccess(e.message);}else{$('projectDescription').textContent=e.message;}}
-}
-function closeProjects(){$('projectsPanel').hidden=true;}
-async function loadStudioRegistry(){
-  if(studioRegistry.length)return studioRegistry;
-  const r=await fetch('/pulse-studios.json',{cache:'no-store'});
-  if(!r.ok)throw new Error('Каталог Studio/Labs недоступен.');
-  const d=await r.json();
-  studioRegistry=Array.isArray(d.studios)?d.studios:[];
-  return studioRegistry;
-}
-function selectCapability(item){
-  activeCapability=item;
-  $('capabilityName').textContent=item?.title||'Studio';
-  $('capabilityDescription').textContent=item?.description||'';
-  const meta=$('capabilityMeta');meta.replaceChildren();
-  for(const value of [String(item?.kind||'studio').toUpperCase(),String(item?.mode||'auto').toUpperCase(),String(item?.status||'')]){
-    if(!value)continue;
-    const pill=document.createElement('span');pill.className='catalog-pill';pill.textContent=value;meta.append(pill);
-  }
-  const modules=$('capabilityModules');modules.replaceChildren();
-  for(const name of item?.modules||[]){
-    const el=document.createElement('div');el.className='catalog-module';el.textContent=name;modules.append(el);
-  }
-  for(const b of document.querySelectorAll('.catalog-card'))b.classList.toggle('active',b.dataset.capability===item?.id);
-}
-function renderCapabilityCatalog(kind){
-  const list=$('capabilitiesList');list.replaceChildren();
-  const items=studioRegistry.filter(x=>x.kind===kind);
-  for(const item of items){
-    const button=document.createElement('button');button.type='button';button.className='catalog-card';button.dataset.capability=item.id;
-    const title=document.createElement('b');title.textContent=item.title;
-    const desc=document.createElement('span');desc.textContent=item.description||'';
-    button.append(title,desc);button.addEventListener('click',()=>selectCapability(item));list.append(button);
-  }
-  selectCapability(items[0]||null);
-}
-async function openCapabilityCatalog(kind){
-  try{
-    await loadStudioRegistry();
-    $('capabilitiesTitle').textContent=kind==='lab'?'LABS':'STUDIO';
-    renderCapabilityCatalog(kind);
-    $('capabilitiesPanel').hidden=false;
-  }catch(e){notice(e.message);}
-}
-function closeCapabilityCatalog(){$('capabilitiesPanel').hidden=true;}
-function launchCapability(){
-  if(!activeCapability)return;
-  if(activeCapability.mode)setMode(activeCapability.mode);
-  $('idea').value=activeCapability.prompt||'';
-  closeCapabilityCatalog();
-  $('idea').focus();
-  notice((activeCapability.title||'Studio')+' подготовлена. Уточните задачу и нажмите CREATE.');
 }
 
 function workspaceRow(title,meta){
@@ -295,6 +182,7 @@ function renderStudioCatalog(kind){
     const run=document.createElement('button');run.type='button';run.className='catalog-run';run.textContent='Использовать →';
     run.addEventListener('click',()=>{
       $('idea').value=item.prompt||'';
+      studioHint=item.id||'';
       setMode(item.mode||'auto');
       closeStudioCatalog();
       $('idea').focus();
@@ -331,9 +219,10 @@ $('composer').addEventListener('submit',async e=>{
   e.preventDefault();if(busy)return;const message=$('idea').value.trim();if(!message){notice('Опишите результат, который нужно получить.');return;}
   if(!token){openAccess('Сначала подключите AZRAIL.');return;}
   setBusy(true);notice('Создаю проект и передаю задачу AZRAIL…');
-  try{const projectId=await ensureProject(message);const key=uuid();const d=await api('/api/azrail/mission',{method:'POST',key,body:{message,projectId,preferredMode:mode}});
-    mission=d.missionId;cached('azrail_pulse_mission',mission);$('mission').hidden=false;$('missionTitle').textContent=message;$('missionState').textContent='ACCEPTED';
-    notice('Задача принята. AZRAIL продолжит работу независимо от открытой страницы.');poll();
+  try{const projectId=await ensureProject(message);const key=uuid();const d=await api('/api/azrail/mission',{method:'POST',key,body:{message,projectId,preferredMode:mode,preferredStudio:studioHint||undefined}});
+    mission=d.missionId;cached('azrail_pulse_mission',mission);studioHint='';$('mission').hidden=false;$('missionTitle').textContent=message;$('missionState').textContent='ACCEPTED';
+    const routed=d.studio?.studio&&d.studio.studio!=='auto'?' · '+d.studio.studio.toUpperCase():'';
+    notice('Задача принята'+routed+'. AZRAIL продолжит работу независимо от открытой страницы.');poll();
   }catch(e){setBusy(false);if(e.status===401)openAccess(e.message);else notice(e.message);}
 });
 for(const b of document.querySelectorAll('[data-mode]'))b.addEventListener('click',()=>setMode(b.dataset.mode));
@@ -342,9 +231,6 @@ $('studiosOpen').addEventListener('click',()=>openStudioCatalog('studio'));
 $('labsOpen').addEventListener('click',()=>openStudioCatalog('lab'));
 $('studioCatalogClose').addEventListener('click',closeStudioCatalog);
 $('studioCatalog').addEventListener('click',e=>{if(e.target===$('studioCatalog'))closeStudioCatalog();});
-$('projectsOpen').addEventListener('click',openProjects);
-$('projectsClose').addEventListener('click',closeProjects);
-$('projectsPanel').addEventListener('click',e=>{if(e.target===$('projectsPanel'))closeProjects();});
 $('projectsOpen').addEventListener('click',openProjects);
 $('projectsClose').addEventListener('click',closeProjects);
 $('projectsPanel').addEventListener('click',e=>{if(e.target===$('projectsPanel'))closeProjects();});
