@@ -87,6 +87,7 @@ function json(data: unknown, env: Env, status = 200): Response {
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+    const requestCf = ((request as Request & { cf?: Record<string, unknown> }).cf ?? {});
     // Pulse Shell speaks through /api/azrail/*, but the mature runtime keeps
     // the original route names. Normalize BEFORE auth/idempotency/rate-limit
     // so the facade cannot become a second, weaker execution path.
@@ -364,7 +365,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // regional coordinates from Cloudflare request metadata.
     if (url.pathname === "/api/presence" && request.method === "POST") {
       try {
-        const heartbeat = await heartbeatPresence(env, principal, request, parsedBody);
+        const heartbeat = await heartbeatPresence(env, principal, requestCf, parsedBody);
         return json({ success: true, heartbeat }, env);
       } catch (err) {
         if (err instanceof TypeError) return json({ error: err.message }, env, 400);
