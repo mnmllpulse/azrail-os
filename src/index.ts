@@ -120,10 +120,26 @@ export default {
         if (admission.kind === "replay") return new Response(admission.body, {
           status:admission.status, headers:getCors(env,{"Content-Type":"application/json", "Idempotency-Replayed":"true"}),
         });
-        if (admission.kind !== "claimed") return json({
-          error:admission.kind === "conflict" ? "Этот Idempotency-Key уже использован с другим содержимым." : "Запрос уже принят и обрабатывается; повторите позже с тем же ключом.",
-          code:admission.kind === "conflict" ? "idempotency_conflict" : "idempotency_pending",
-        },env,409);
+        if (admission.kind === "conflict") {
+          return json(
+            {
+              error: "Этот Idempotency-Key уже использован с другим содержимым.",
+              code: "idempotency_conflict",
+            },
+            env,
+            409,
+          );
+        }
+        if (admission.kind === "pending") {
+          return json(
+            {
+              error: "Запрос уже принят и обрабатывается; повторите позже с тем же ключом.",
+              code: "idempotency_pending",
+            },
+            env,
+            409,
+          );
+        }
         const response = await handleRequest(new Request(request,{body:raw}),env);
         try { await finishAdmission(env,`${auth.caller}:${key}`,admission.claim,response); }
         catch (err) { log("error","admission.finalize_failed",{error:err instanceof Error ? err.message : String(err)}); }
