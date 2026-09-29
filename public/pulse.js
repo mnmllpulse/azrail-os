@@ -150,6 +150,193 @@ async function openProjects(){
   }catch(e){notice(e.message);}
 }
 function closeProjects(){$('projectsPanel').hidden=true;}
+function displayNumber(value){
+  const n=Number(value);
+  return Number.isFinite(n)?new Intl.NumberFormat('ru-RU').format(n):'—';
+}
+function displayUsd(value){
+  const n=Number(value);
+  return Number.isFinite(n)?'
+
+
+async function loadStudioCatalog(){
+  if(studioCatalogData)return studioCatalogData;
+  const r=await fetch('/pulse-studios.json',{cache:'no-store'});
+  if(!r.ok)throw new Error('Не удалось загрузить каталог Studio/Labs.');
+  const d=await r.json();
+  studioCatalogData=Array.isArray(d.studios)?d.studios:[];
+  return studioCatalogData;
+}
+function catalogChip(text){
+  const el=document.createElement('span');el.className='catalog-chip';el.textContent=text;return el;
+}
+function renderStudioCatalog(kind){
+  const grid=$('studioCatalogGrid');grid.replaceChildren();
+  const items=(studioCatalogData||[]).filter(x=>kind==='lab'?x.kind==='lab':x.kind!=='lab');
+  $('studioCatalogTitle').textContent=kind==='lab'?'LABS':'STUDIO';
+  if(!items.length){grid.append(workspaceEmpty('Нет доступных направлений.'));return;}
+  items.forEach((item,index)=>{
+    const card=document.createElement('article');card.className='catalog-card';
+    const num=document.createElement('span');num.className='catalog-index';num.textContent=String(index+1).padStart(2,'0');
+    const title=document.createElement('h3');title.textContent=item.title||item.id;
+    const desc=document.createElement('p');desc.textContent=item.description||'';
+    const meta=document.createElement('div');meta.className='catalog-meta';
+    meta.append(catalogChip(String(item.mode||'auto').toUpperCase()));
+    meta.append(catalogChip(String(item.status||'planned').toUpperCase()));
+    meta.append(catalogChip(String(Array.isArray(item.modules)?item.modules.length:0)+' MODULES'));
+    const modules=document.createElement('ul');modules.className='catalog-modules';
+    for(const name of (item.modules||[])){const li=document.createElement('li');li.textContent=name;modules.append(li);}
+    const run=document.createElement('button');run.type='button';run.className='catalog-run';run.textContent='Использовать →';
+    run.addEventListener('click',()=>{
+      $('idea').value=item.prompt||'';
+      studioHint=item.id||'';
+      setMode(item.mode||'auto');
+      closeStudioCatalog();
+      $('idea').focus();
+      notice((item.kind==='lab'?'Лаборатория ':'Студия ')+(item.title||item.id)+' подготовила запрос. Отредактируйте его или запускайте.');
+    });
+    card.append(num,title,desc,meta,modules,run);grid.append(card);
+  });
+}
+async function openStudioCatalog(kind){
+  try{
+    await loadStudioCatalog();
+    renderStudioCatalog(kind);
+    $('studioCatalog').hidden=false;
+  }catch(e){notice(e.message);}
+}
+function closeStudioCatalog(){$('studioCatalog').hidden=true;}
+function renderMission(d){
+  $('mission').hidden=false;const m=d.mission||{};
+  $('missionTitle').textContent=m.goal||m.title||'AZRAIL mission';
+  $('missionState').textContent=(labels[m.status]||m.status||'WORKING').toUpperCase();setProgress(m.status);
+  const list=$('missionSteps');list.replaceChildren();
+  for(const step of d.plan||[]){const li=document.createElement('li');li.textContent=(step.title||'Шаг')+' · '+(labels[step.status]||step.status||'');list.append(li);}
+  const r=d.result;$('missionResult').textContent=typeof r==='string'?r:[r?.summary,r?.error,Array.isArray(r?.questions)?r.questions.join('\n'):null].filter(Boolean).join('\n\n');
+  return !!d.done;
+}
+async function poll(){
+  clearTimeout(timer);if(!token||!mission||document.hidden)return;
+  try{const d=await api('/api/azrail/mission?missionId='+encodeURIComponent(mission));const done=renderMission(d);
+    if(done){setBusy(false);notice(d.mission?.status==='completed'?'Миссия завершена и проверена.':'Миссия завершилась: '+(labels[d.mission?.status]||d.mission?.status||''));return;}
+    setBusy(true);timer=setTimeout(poll,3500);
+  }catch(e){setBusy(false);if(e.status===401)openAccess(e.message);else notice(e.message);}
+}
+$('composer').addEventListener('submit',async e=>{
+  e.preventDefault();if(busy)return;const message=$('idea').value.trim();if(!message){notice('Опишите результат, который нужно получить.');return;}
+  if(!token){openAccess('Сначала подключите AZRAIL.');return;}
+  setBusy(true);notice('Создаю проект и передаю задачу AZRAIL…');
+  try{const projectId=await ensureProject(message);const key=uuid();const d=await api('/api/azrail/mission',{method:'POST',key,body:{message,projectId,preferredMode:mode,preferredStudio:studioHint||undefined}});
+    mission=d.missionId;cached('azrail_pulse_mission',mission);studioHint='';$('mission').hidden=false;$('missionTitle').textContent=message;$('missionState').textContent='ACCEPTED';
+    const routed=d.studio?.studio&&d.studio.studio!=='auto'?' · '+d.studio.studio.toUpperCase():'';
+    notice('Задача принята'+routed+'. AZRAIL продолжит работу независимо от открытой страницы.');poll();
+  }catch(e){setBusy(false);if(e.status===401)openAccess(e.message);else notice(e.message);}
+});
+for(const b of document.querySelectorAll('[data-mode]'))b.addEventListener('click',()=>setMode(b.dataset.mode));
+setMode(mode);
+$('studiosOpen').addEventListener('click',()=>openStudioCatalog('studio'));
+$('labsOpen').addEventListener('click',()=>openStudioCatalog('lab'));
+$('studioCatalogClose').addEventListener('click',closeStudioCatalog);
+$('studioCatalog').addEventListener('click',e=>{if(e.target===$('studioCatalog'))closeStudioCatalog();});
+$('systemOpen').addEventListener('click',openSystem);
+$('systemClose').addEventListener('click',closeSystem);
+$('systemPanel').addEventListener('click',e=>{if(e.target===$('systemPanel'))closeSystem();});
+$('projectsOpen').addEventListener('click',openProjects);
+$('projectsClose').addEventListener('click',closeProjects);
+$('projectsPanel').addEventListener('click',e=>{if(e.target===$('projectsPanel'))closeProjects();});
+$('accessConnect').addEventListener('click',connect);
+$('accessClose').addEventListener('click',closeAccess);
+$('accessKey').addEventListener('keydown',e=>{if(e.key==='Enter')connect();});
+addEventListener('message',e=>{
+  if(e.origin!==location.origin||e.data?.type!=='pulse:globe-ready')return;
+  globeReady=true;heartbeatPresence();
+});
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){clearTimeout(timer);clearTimeout(presenceTimer);}
+  else{if(mission)poll();heartbeatPresence();}
+});
+if(token){ensureProjectList().then(()=>{notice('AZRAIL подключён.');heartbeatPresence();if(mission){setBusy(true);poll();}}).catch(e=>{if(e.status===401)openAccess('Ключ нужно проверить повторно.');else notice(e.message);});}
+else notice('Введите задачу. При первом запуске система предложит подключить AZRAIL.');
+})();+n.toFixed(n<1?4:2):'—';
+}
+function serviceText(service){
+  if(!service)return 'нет данных';
+  const latency=typeof service.ms==='number'?' · '+service.ms+' ms':'';
+  return String(service.status||'unknown').toUpperCase()+latency;
+}
+async function readHealth(){
+  const r=await fetch('/health',{headers:headers(false,'')});
+  let data={};try{data=await r.json();}catch{}
+  return {ok:r.ok,status:r.status,data};
+}
+async function openSystem(){
+  if(!token){openAccess('Сначала подключите AZRAIL.');return;}
+  $('systemPanel').hidden=false;
+  $('systemProject').textContent=project?'Project ID: '+project:'Проект не выбран.';
+  $('systemNote').textContent='Загружаю фактические runtime-данные…';
+  const [healthResult,routingResult,metricsResult]=await Promise.allSettled([
+    readHealth(),
+    api('/api/azrail/routing-settings'),
+    project?api('/api/azrail/metrics?projectId='+encodeURIComponent(project)):Promise.resolve(null),
+  ]);
+
+  if(healthResult.status==='fulfilled'){
+    const h=healthResult.value.data||{};
+    $('systemOverall').textContent=String(h.status||('HTTP '+healthResult.value.status)).toUpperCase();
+    const services=Array.isArray(h.services)?h.services:[];
+    const byName=Object.fromEntries(services.map(x=>[x.name,x]));
+    $('systemD1').textContent=serviceText(byName.d1);
+    $('systemKV').textContent=serviceText(byName.kv);
+    $('systemR2').textContent=serviceText(byName.r2);
+  }else{
+    $('systemOverall').textContent='UNAVAILABLE';
+    $('systemD1').textContent=$('systemKV').textContent=$('systemR2').textContent='нет данных';
+  }
+
+  if(routingResult.status==='fulfilled'){
+    const r=routingResult.value||{};
+    const p=r.policy||{};
+    $('systemMetering').textContent=String(r.metering||'policy');
+    $('systemSpend').textContent=displayUsd(r.committedUsd);
+    $('systemMonthlyBudget').textContent=displayUsd(p.monthlyBudgetUsd);
+    $('systemGateway').textContent=(r.gatewayConfigured?'AI Gateway ON':'AI Gateway OFF')+' · Workers '+String(r.workersPlan||'unknown').toUpperCase();
+    $('systemPolicy').textContent=(p.allowThirdPartyModels?'HYBRID':'FREE-ONLY')+(p.forceFree?' · FORCE FREE':'')+' · REV '+String(p.revision??0);
+    $('systemNote').textContent=String(r.note||'SYSTEM показывает только фактические runtime-данные.');
+  }else{
+    $('systemGateway').textContent='нет данных';
+    $('systemPolicy').textContent='нет данных';
+    $('systemMonthlyBudget').textContent='—';
+  }
+
+  if(metricsResult.status==='fulfilled'&&metricsResult.value){
+    const m=metricsResult.value||{};
+    const models=m.models||{};
+    $('systemMetering').textContent=String(m.metering||$('systemMetering').textContent||'—').toUpperCase();
+    $('systemCalls').textContent=displayNumber(models.calls);
+    $('systemInputTokens').textContent=displayNumber(models.input_tokens);
+    $('systemOutputTokens').textContent=displayNumber(models.output_tokens);
+    $('systemUnknownCosts').textContent=displayNumber(models.unknown_cost_calls);
+    if(models.measured_micro_usd!==undefined&&models.measured_micro_usd!==null){
+      $('systemSpend').textContent=displayUsd(Number(models.measured_micro_usd)/1e6);
+    }
+    const missions=Array.isArray(m.missions)?m.missions:[];
+    $('systemMissions').replaceChildren();
+    if(!missions.length){
+      $('systemMissions').textContent='Для проекта пока нет миссий.';
+    }else{
+      for(const item of missions){
+        const row=document.createElement('div');
+        row.textContent=String(item.status||'unknown').toUpperCase()+' · '+displayNumber(item.count);
+        $('systemMissions').append(row);
+      }
+    }
+  }else{
+    $('systemCalls').textContent=$('systemInputTokens').textContent=$('systemOutputTokens').textContent=$('systemUnknownCosts').textContent='—';
+    $('systemMissions').textContent=project?'Метрики проекта недоступны.':'Выберите проект для project-scoped метрик.';
+  }
+}
+function closeSystem(){$('systemPanel').hidden=true;}
+
 
 
 async function loadStudioCatalog(){
