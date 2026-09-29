@@ -61,15 +61,18 @@ function validateTaskFields(body: Record<string,unknown>): void {
   const variants:Record<string,Record<string,string[]>> = {
     gitOp:{create_branch:["branch"],commit_file:["branch","path","content","message"],open_pr:["head","base","title"],diff:["base","head"],list_commits:[]},
     qaOp:{coverage_gaps:[],trigger_tests:["workflow"],latest_run:[],check_run:[]},
+    deployOp:{check_readiness:[],trigger_ci:["environment"]},
   };
-  for(const key of ["gitOp","qaOp"]){
+  for(const key of ["gitOp","qaOp","deployOp"]){
     if(body[key]===undefined)continue;
     const op=body[key] as Record<string,unknown>;
     if(!op||typeof op!=="object"||Array.isArray(op)||typeof op.type!=="string"||!Object.hasOwn(variants[key],op.type))throw new Error(`Некорректная операция ${key}.`);
-    for(const field of ["branch","from","path","content","message","head","base","title","body","workflow","ref"])
+    for(const field of ["branch","from","path","content","message","head","base","title","body","workflow","ref","environment"])
       if(op[field]!==undefined&&typeof op[field]!=="string")throw new Error(`Поле ${key}.${field} должно быть строкой.`);
     for(const field of variants[key][op.type])if(typeof op[field]!=="string"||(field!=="content"&&!op[field]))throw new Error(`Требуется ${key}.${field}.`);
     if(op.type==="check_run"&&(!Number.isSafeInteger(op.runId)||Number(op.runId)<=0))throw new Error("Нужен положительный runId.");
     if(op.limit!==undefined&&(!Number.isSafeInteger(op.limit)||Number(op.limit)<=0||Number(op.limit)>100))throw new Error("limit: целое число от 1 до 100.");
+    if(op.type==="trigger_ci" && !["staging","production"].includes(String(op.environment))) throw new Error("deployOp.environment должен быть staging или production.");
+    if(op.confirmProduction!==undefined && typeof op.confirmProduction!=="boolean") throw new Error("deployOp.confirmProduction должно быть boolean.");
   }
 }
