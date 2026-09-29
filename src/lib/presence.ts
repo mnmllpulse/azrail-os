@@ -26,14 +26,13 @@ export interface PresenceSession {
 export async function heartbeatPresence(
   env: Env,
   principal: Principal,
-  request: Request,
+  cf: Record<string, unknown>,
   input: { sessionId?: unknown; projectId?: unknown },
 ): Promise<{ sessionId: string; expiresAt: number }> {
   const sessionId = typeof input.sessionId === "string" ? input.sessionId.trim() : "";
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(sessionId)) throw new TypeError("Некорректный sessionId.");
 
   const projectId = typeof input.projectId === "string" && input.projectId ? input.projectId : null;
-  const cf = (request as Request & { cf?: Record<string, unknown> }).cf ?? {};
   const country = typeof cf.country === "string" ? cf.country.slice(0, 8) : null;
   const edge = typeof cf.colo === "string" ? cf.colo.slice(0, 12) : null;
   const lat = coarse(cf.latitude);
