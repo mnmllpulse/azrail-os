@@ -1,6 +1,8 @@
 import { withBillingScope, projectBillingScope } from "../lib/billing-context";
 import { Agent } from "agents";
 import { assertRepo, UnsafePathError } from "../lib/safe-path";
+import { requireCapability } from "../lib/project-control";
+import { AccessError } from "../lib/accounts";
 import { unzipSync } from "fflate";
 import type { Env, DeployAgentState, TaskRequest, TaskResult } from "../types";
 
@@ -90,6 +92,18 @@ export class DeployAgent extends Agent<Env, DeployAgentState> {
   }
 
   private async triggerCi(request: TaskRequest): Promise<TaskResult> {
+    try {
+      await requireCapability(this.env, request.projectId, "deploy");
+    } catch (err) {
+      if (err instanceof AccessError) {
+        return {
+          status: "needs_input",
+          agent: "deploy-agent",
+          summary: err.message,
+        };
+      }
+      throw err;
+    }
     // GITHUB_REPO — секрет окружения, а не поле из тела запроса, поэтому
     // риск здесь ниже, чем у аналогичных мест в git-agent.ts/qa-agent.ts,
     // где repo приходит из request. Но именно этот вызов до сих пор
