@@ -43,6 +43,7 @@ import { listRuns, loadOutcomes, saveRun } from "./bench/store";
 import { runInContainer, detectBackend } from "./core/sandbox";
 import { syncWorkspaceToSandbox } from "./core/workspace-sync";
 import { normalizeAzrailRequest } from "./protocol/facade";
+import { defaultIterationsForMode, normalizeRoutingMode } from "./lib/routing-mode";
 import { createProject as createProjectApi, getProject as getProjectApi, listProjects as listProjectsApi, updateProject as updateProjectApi } from "./lib/projects-api";
 
 export { Orchestrator };
@@ -336,8 +337,9 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           // Тело нужно прочитать заранее, чтобы узнать потолок шагов.
           // Request можно прочитать один раз, поэтому дальше по коду идёт
           // клон — иначе роут получил бы уже опустошённый поток.
-          const peek = await request.clone().json().catch(() => ({}) as { maxIterations?: number });
-          cost = clampIterations((peek as { maxIterations?: number }).maxIterations);
+          const peek = await request.clone().json().catch(() => ({}) as { maxIterations?: number; preferredMode?: unknown });
+          const mode = normalizeRoutingMode((peek as { preferredMode?: unknown }).preferredMode);
+          cost = clampIterations((peek as { maxIterations?: number }).maxIterations ?? defaultIterationsForMode(mode));
         }
         const rl = await checkRateLimit(env, auth.caller ?? "shared", cost);
         if (!rl.allowed) {
@@ -612,6 +614,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         projectId?: string;
         maxIterations?: number;
         preferredModel?: string;
+        preferredMode?: unknown;
         attachments?: AttachmentRef[];
       };
       let goal = body.message?.trim();
@@ -657,13 +660,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
        * одного полного прогона моделей, и заметить это можно было только
        * по счёту. Ключ необязателен: без него поведение прежнее. */
       const missionId = crypto.randomUUID();
-      const maxIterations = clampIterations(body.maxIterations);
+      const preferredMode = normalizeRoutingMode(body.preferredMode);
+      const maxIterations = clampIterations(body.maxIterations ?? defaultIterationsForMode(preferredMode));
 
       // Эта запись ОБЯЗАНА пройти, и падать здесь правильно: без строки в
       // missions миссию нечем отслеживать и не к чему привязать события.
       // Отказ ДО работы дешевле, чем осиротевший прогон, потративший модели.
       try {
-        if (!await createMission(env, missionId, body.projectId, goal, {maxIterations,preferredModel:body.preferredModel,publicHostname:url.hostname})) {
+        if (!await createMission(env, missionId, body.projectId, goal, {maxIterations,preferredModel:body.preferredModel,preferredMode,publicHostname:url.hostname})) {
           return json({error:"В проекте уже выполняется миссия. Дождитесь завершения или отмените её.", code:"project_busy"},env,409);
         }
       } catch (err) {
@@ -705,6 +709,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           goal,
           maxIterations,
           preferredModel: body.preferredModel,
+          preferredMode,
           // Хост берётся ИЗ ЗАПРОСА: на своём домене предпросмотр должен
           // вести на него же, а не на workers.dev. Внутри фоновой задачи
           // запроса уже нет — значит, передать надо сейчас.
