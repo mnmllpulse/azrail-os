@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "studios": [
+    {
+      "id": "development",
+      "kind": "studio",
+      "title": "Разработка",
+      "description": "Код, web, архитектура, QA, security, sandbox и deploy.",
+      "status": "core+legacy-migration",
+      "mode": "code",
+      "prompt": "Проанализируй текущий проект как студия разработки. Определи архитектуру, необходимые изменения, проверки и безопасный путь к рабочему результату.",
+      "modules": [
+        "CodeStudioPanel",
+        "WebStudioPanel",
+        "DeployStudioPanel",
+        "SandboxStudioPanel",
+        "AutomationStudioPanel",
+        "SecurityStudioPanel",
+        "LogicArchitect",
+        "CloudPipeline"
+      ]
+    },
+    {
+      "id": "creative",
+      "kind": "studio",
+      "title": "Creative",
+      "description": "UI/UX, дизайн-системы, изображения, видео и визуальные материалы.",
+      "status": "legacy-migration",
+      "mode": "creative",
+      "prompt": "Подготовь премиальный визуальный концепт для текущего проекта: UX, дизайн-систему, компоненты и конкретный план реализации. Не утверждай, что неподключённые media-адаптеры уже выполнили генерацию.",
+      "modules": [
+        "ImageStudioPanel",
+        "VideoStudioPanel",
+        "DesignSystemExplorer",
+        "BentoForge",
+        "EliteLayoutForge",
+        "StyleNavigator",
+        "QuantumImageOrchestrator",
+        "QuantumVideoOrchestrator"
+      ]
+    },
+    {
+      "id": "audio",
+      "kind": "studio",
+      "title": "Audio",
+      "description": "Музыкальная архитектура, анализ, композиционные схемы и аудио-интеллект.",
+      "status": "legacy-migration",
+      "mode": "creative",
+      "prompt": "Работай как аудио-студия: подготовь структуру, анализ и композиционное решение. Чётко отделяй текстовый/структурный результат от реальной генерации аудио, если аудиодвижок не подключён.",
+      "modules": [
+        "MusicStudioPanel",
+        "QuantumAudioOrchestrator",
+        "MusicIntelligenceAgent"
+      ]
+    },
+    {
+      "id": "intelligence",
+      "kind": "studio",
+      "title": "Intelligence",
+      "description": "Research, knowledge, data, analytics и model intelligence.",
+      "status": "mixed",
+      "mode": "deep",
+      "prompt": "Проведи глубокое исследование текущей задачи: собери контекст проекта, сравни варианты, выдели проверяемые выводы и сформируй решение с рисками и следующими действиями.",
+      "modules": [
+        "KnowledgeHubPanel",
+        "DataStudioPanel",
+        "AnalyticsStudioPanel",
+        "ModelStudioPanel",
+        "QuantumKnowledgeOrchestrator",
+        "DataForge",
+        "PerformanceAnalytics"
+      ]
+    },
+    {
+      "id": "agents",
+      "kind": "studio",
+      "title": "Agents",
+      "description": "Agent Forge, swarm, orchestration и настройка рабочих ролей.",
+      "status": "core+legacy-migration",
+      "mode": "deep",
+      "prompt": "Разбери задачу как мультиагентную миссию. Определи минимальный набор capabilities, порядок агентов, инструменты, проверки и границы ответственности без ручного микроменеджмента.",
+      "modules": [
+        "AgentForgePanel",
+        "SwarmConfigurationPanel",
+        "AgentChatSimulator",
+        "BotManagerPanel",
+        "AzrailOrchestrator",
+        "QuantumAgentOrchestrator"
+      ]
+    },
+    {
+      "id": "operations",
+      "kind": "studio",
+      "title": "Operations",
+      "description": "Billing, marketplace, integrations, automation и platform operations.",
+      "status": "legacy-migration",
+      "mode": "balanced",
+      "prompt": "Проанализируй операционную часть проекта: интеграции, deployment, автоматизацию, observability, расходы и точки отказа. Предложи минимальный безопасный production-план.",
+      "modules": [
+        "BillingStudioPanel",
+        "MarketplaceStudioPanel",
+        "AutomationStudioPanel",
+        "PlatformBridge",
+        "TeamSync"
+      ]
+    },
+    {
+      "id": "pulse-lab",
+      "kind": "lab",
+      "title": "PULSE LAB",
+      "description": "Эксперименты, benchmarks, vector/interaction research и проверка новых возможностей.",
+      "status": "mixed",
+      "mode": "deep",
+      "prompt": "Работай в режиме лаборатории: сформулируй гипотезу, критерии проверки, эксперимент, измеримые результаты и условия отката. Не подменяй эксперимент предположением.",
+      "modules": [
+        "PulseLabPanel",
+        "VectorLab",
+        "InteractionLab",
+        "CognitiveGraph",
+        "PsychologyCivilizationHub"
+      ]
+    }
+  ]
+}

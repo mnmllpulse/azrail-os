@@ -45,6 +45,9 @@ import { syncWorkspaceToSandbox } from "./core/workspace-sync";
 import { normalizeAzrailRequest } from "./protocol/facade";
 import { defaultIterationsForMode, normalizeRoutingMode } from "./lib/routing-mode";
 import { createProject as createProjectApi, getProject as getProjectApi, listProjects as listProjectsApi, updateProject as updateProjectApi } from "./lib/projects-api";
+import { heartbeatPresence, listPresence } from "./lib/presence";
+import { loadProjectWorkspace } from "./lib/project-workspace";
+import { projectObservability } from "./lib/observability";
 
 export { Orchestrator };
 
@@ -86,6 +89,7 @@ function json(data: unknown, env: Env, status = 200): Response {
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+    const requestCf = ((request as Request & { cf?: Record<string, unknown> }).cf ?? {});
     // Pulse Shell speaks through /api/azrail/*, but the mature runtime keeps
     // the original route names. Normalize BEFORE auth/idempotency/rate-limit
     // so the facade cannot become a second, weaker execution path.
@@ -374,6 +378,29 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       }
     }
 
+    // ─── Pulse Globe presence ─────────────────────────────────────────
+    // Heartbeat is authenticated and intentionally stores only coarse
+    // regional coordinates from Cloudflare request metadata.
+    if (url.pathname === "/api/presence" && request.method === "POST") {
+      try {
+        const heartbeat = await heartbeatPresence(env, principal, requestCf, parsedBody);
+        return json({ success: true, heartbeat }, env);
+      } catch (err) {
+        if (err instanceof TypeError) return json({ error: err.message }, env, 400);
+        throw err;
+      }
+    }
+
+    if (url.pathname === "/api/presence" && request.method === "GET") {
+      const sessionId = url.searchParams.get("sessionId") ?? "";
+      const projectId = url.searchParams.get("projectId") ?? undefined;
+      return json({
+        success: true,
+        sessions: await listPresence(env, principal, sessionId, projectId),
+        precision: "regional",
+      }, env);
+    }
+
     // ─── Project-first API ───────────────────────────────────────────
     // Новый Pulse Shell начинает с проекта, а не с разрозненных миссий.
     // Эти маршруты используют существующую таблицу projects и тот же
@@ -419,6 +446,27 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       }
     }
 
+    const workspaceRoute = url.pathname.match(/^\/api\/projects\/([^/]+)\/workspace$/);
+    if (workspaceRoute && request.method === "GET") {
+      let projectId: string;
+      try {
+        projectId = decodeURIComponent(workspaceRoute[1]);
+      } catch {
+        return json({ error: "Некорректный projectId." }, env, 400);
+      }
+      const snapshot = await loadProjectWorkspace(env, projectId);
+      const orchestrator = await getAgentByName(env.Orchestrator, projectId);
+      const history = await orchestrator.getHistory(projectId, 20);
+      return json({
+        success: true,
+        projectId,
+        files: snapshot.files,
+        memory: snapshot.memory,
+        versions: snapshot.versions,
+        history,
+      }, env);
+    }
+
     if (url.pathname === "/api/routing-settings" && request.method === "GET") {
       const policy = await readModelPolicy(env);
       const month = `paid-month:${new Date().toISOString().slice(0,7)}`;
@@ -457,6 +505,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       await env.AZRAIL_D1.prepare("INSERT INTO resource_owners VALUES(?,?,?) ON CONFLICT(kind,resource_id) DO UPDATE SET account_id=excluded.account_id").bind(kind,id,account).run();
       return json({success:true},env);
     }
+    if (url.pathname === "/api/observability" && request.method === "GET") {
+      const projectId = url.searchParams.get("projectId");
+      if (!projectId) return json({ error: "projectId обязателен." }, env, 400);
+      return json({ success: true, observability: await projectObservability(env, projectId) }, env);
+    }
+
     if(url.pathname === "/api/metrics" && request.method === "GET") {
       const project=url.searchParams.get("projectId");
       if(!project)return json({error:"projectId обязателен."},env,400);

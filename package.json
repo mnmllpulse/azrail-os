@@ -4,32 +4,39 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "npm run build:pulse && wrangler dev",
     "deploy": "wrangler deploy",
     "types": "wrangler types",
     "db:schema": "wrangler d1 execute azrail-db --remote --file=./schema.sql",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check": "npm run build:ui && npm run typecheck && npm test",
+    "check": "npm run build:ui && npm run build:pulse && npm run typecheck && npm test",
     "build:check": "wrangler deploy --dry-run --containers-rollout=none",
     "db:security": "wrangler d1 execute azrail-db --remote --file=./migrations/004-security-hardening.sql",
     "db:migrate": "node scripts/migrate.mjs",
     "smoke": "node scripts/smoke.mjs",
     "build:ui": "node scripts/build-ultimate.mjs",
-    "predeploy": "npm run build:ui"
+    "predeploy": "npm run build:ui && npm run build:pulse",
+    "build:pulse": "node scripts/build-pulse.mjs",
+    "staging:check": "node scripts/check-staging.mjs",
+    "staging:migrate": "npm run staging:check && wrangler d1 execute AZRAIL_D1 --remote --config wrangler.staging.toml --file=./schema.sql",
+    "staging:dry-run": "npm run build:ui && npm run build:pulse && npm run staging:check && wrangler deploy --dry-run --config wrangler.staging.toml --containers-rollout=none",
+    "staging:deploy": "npm run build:ui && npm run build:pulse && npm run staging:check && wrangler deploy --config wrangler.staging.toml --containers-rollout=none"
   },
   "dependencies": {
     "@cloudflare/sandbox": "0.12.9",
     "agents": "^0.8.0",
-    "fflate": "^0.8.2"
+    "fflate": "^0.8.2",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240729.0",
     "@types/node": "^24.13.6",
     "typescript": "^5.6.0",
     "vitest": "^4.1.11",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.0.0",
+    "esbuild": "^0.28.1"
   },
   "engines": {
     "node": ">=24.0.0"
