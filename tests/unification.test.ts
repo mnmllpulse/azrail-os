@@ -243,3 +243,24 @@ describe("System observability drawer", () => {
     expect(client.split("$('projectsOpen').addEventListener").length - 1).toBe(1);
   });
 });
+
+
+describe("Standalone System view", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const system = fs.readFileSync(path.join(root, "public/system.js"), "utf8");
+
+  it("имеет одну системную точку входа без мёртвого drawer JS", () => {
+    expect(shell.split('href="/system.html"').length - 1).toBe(1);
+    expect(shell).not.toContain('id="systemOpen"');
+    expect(shell).not.toContain(".catalog-body");
+    expect(shell).not.toContain("\\n");
+  });
+
+  it("читает только реальные runtime API", () => {
+    expect(system).toContain("/api/azrail/me");
+    expect(system).toContain("/api/azrail/routing-settings");
+    expect(system).toContain("/api/azrail/metrics");
+    expect(system).not.toMatch(/innerHTML\s*=/);
+  });
+});
