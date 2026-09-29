@@ -4,13 +4,24 @@ const token = process.env.AZRAIL_TOKEN;
 if (!base || !token) throw Error('Set AZRAIL_URL and AZRAIL_TOKEN in your shell.');
 const url = new URL(base);
 if (url.protocol !== 'https:' && !['localhost','127.0.0.1'].includes(url.hostname)) throw Error('HTTPS is required.');
+const project = process.env.AZRAIL_SMOKE_PROJECT;
 const checks = [
+  ['/pulse.html', false, 200],
+  ['/pulse-globe.html', false, 200],
   ['/api/me', false, 401],
   ['/agents/orchestrator/default', true, 404],
   ['/api/me', true, 200],
   ['/health', true, 200],
   ['/api/agents', true, 200],
+  ['/api/azrail/projects', true, 200],
+  ['/api/azrail/routing-settings', true, 200],
 ];
+if (project) {
+  checks.push(
+    ['/api/azrail/projects/'+encodeURIComponent(project)+'/workspace', true, 200],
+    ['/api/azrail/observability?projectId='+encodeURIComponent(project), true, 200],
+  );
+}
 let failed = 0;
 for (const [path, authenticated, expected] of checks) {
   try {
