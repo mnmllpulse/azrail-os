@@ -93,3 +93,14 @@
 - System: реальные /me, /routing-settings, /metrics; fake metrics запрещены.
 - Security: session token только в sessionStorage, без localStorage/URL; DOM rendering без innerHTML.
 - CI: workflow существует, но инфраструктурная диагностика показала failure даже у runner-only job. Это внешний blocker; PR нельзя считать зелёным до исправления Actions.
+
+
+## Canonical design reference
+
+Canva v2: **DARK MNMLL PULSE OS × AZRAIL — Unified Interface Concept v2**
+
+- Design ID: `DAHWmofp_Os`
+- Edit URL: https://canva.link/qkpdojqd4w4106f
+- Scope: CREATE / STUDIO / PROJECTS / LABS / SYSTEM / ADVANCED
+- Visual hierarchy: one Composer, Pulse Globe background, restrained violet accent, mission progress, no decorative fake metrics.
+- This reference follows the implemented Shell. It is not a separate competing design system.
