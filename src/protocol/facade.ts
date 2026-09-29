@@ -22,6 +22,8 @@ const EXACT_ALIASES: Record<string, string> = {
   "/api/azrail/stream": "/api/stream",
   "/api/azrail/stream/ticket": "/api/stream/ticket",
   "/api/azrail/projects": "/api/projects",
+  "/api/azrail/me": "/api/me",
+  "/api/azrail/routing-settings": "/api/routing-settings",
 };
 
 export function canonicalApiPath(pathname: string): string {
