@@ -27,6 +27,7 @@ import {
 } from "../lib/mission-state";
 import { UsageLedger } from "../lib/usage";
 import { quickIntent } from "../lib/quick-intent";
+import type { RoutingMode } from "../lib/routing-mode";
 
 const MIN_PAYLOAD_LENGTH = 8;
 
@@ -480,6 +481,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     goal: string;
     maxIterations: number;
     preferredModel?: string;
+    preferredMode?: RoutingMode;
     publicHostname?: string;
   }): Promise<{ scheduled: true; missionId: string }> {
     const delivered=await this.ctx.storage.get<boolean>(`delivery:${params.missionId}`);
@@ -521,6 +523,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
           projectId: params.projectId,
           iteration: 0,
           maxIterations: params.maxIterations,
+          routingMode: params.preferredMode,
           // Копилка заводится ЗДЕСЬ, на запуске миссии, а не внутри цикла:
           // заведённая внутри, она считала бы один шаг и не отвечала бы на
           // вопрос «во что обошлась миссия» — то есть повторила бы судьбу
@@ -594,6 +597,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     goal: string;
     maxIterations: number;
     preferredModel?: string;
+    preferredMode?: RoutingMode;
     publicHostname?: string;
   }): Promise<void> {
     const { missionId, projectId, goal } = params;
@@ -611,7 +615,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
       await initializeMissionBudget(this.env, missionId);
       const engine = new ExecutionEngine(this.env);
       const result = await engine.runMission(
-        { message: goal, projectId, preferredModel: params.preferredModel },
+        { message: goal, projectId, preferredModel: params.preferredModel, preferredMode: params.preferredMode },
         {
           missionId,
           projectId,
