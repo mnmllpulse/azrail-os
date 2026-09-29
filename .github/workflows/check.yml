@@ -14,6 +14,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  bootstrap-runner:
+    name: bootstrap-runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: node --version && npm --version
+
+  bootstrap-checkout:
+    name: bootstrap-checkout
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: test -f package.json
+
+  bootstrap-node:
+    name: bootstrap-node
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --version && npm --version
+
+  bootstrap-npm-ci:
+    name: bootstrap-npm-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest
