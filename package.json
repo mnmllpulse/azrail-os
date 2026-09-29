@@ -18,7 +18,11 @@
     "smoke": "node scripts/smoke.mjs",
     "build:ui": "node scripts/build-ultimate.mjs",
     "predeploy": "npm run build:ui && npm run build:pulse",
-    "build:pulse": "node scripts/build-pulse.mjs"
+    "build:pulse": "node scripts/build-pulse.mjs",
+    "staging:check": "node scripts/check-staging.mjs",
+    "staging:migrate": "npm run staging:check && wrangler d1 execute AZRAIL_D1 --remote --config wrangler.staging.toml --file=./schema.sql",
+    "staging:dry-run": "npm run build:ui && npm run build:pulse && npm run staging:check && wrangler deploy --dry-run --config wrangler.staging.toml --containers-rollout=none",
+    "staging:deploy": "npm run build:ui && npm run build:pulse && npm run staging:check && wrangler deploy --config wrangler.staging.toml --containers-rollout=none"
   },
   "dependencies": {
     "@cloudflare/sandbox": "0.12.9",
