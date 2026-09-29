@@ -88,7 +88,7 @@ describe("Routing profiles", () => {
 describe("Pulse Globe production boundary", () => {
   const root = path.resolve(import.meta.dirname, "..");
   const html = fs.readFileSync(path.join(root, "public/pulse-globe.html"), "utf8");
-  const source = fs.readFileSync(path.join(root, "src/ui/pulse-globe.ts"), "utf8");
+  const source = fs.readFileSync(path.join(root, "src/ui/pulse-globe.mjs"), "utf8");
   const build = fs.readFileSync(path.join(root, "scripts/build-pulse.mjs"), "utf8");
 
   it("не грузит Three.js с CDN", () => {
