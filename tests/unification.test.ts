@@ -199,3 +199,37 @@ describe("Advanced observability", () => {
     expect(shell).toContain("LEGACY ↗");
   });
 });
+
+
+describe("Agent capability defense-in-depth", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const gitAgent = fs.readFileSync(path.join(root, "src/agents/git-agent.ts"), "utf8");
+  const deployAgent = fs.readFileSync(path.join(root, "src/agents/deploy-agent.ts"), "utf8");
+  const qaAgent = fs.readFileSync(path.join(root, "src/agents/qa-agent.ts"), "utf8");
+  const api = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+  const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+
+  it("GitAgent сам требует git capability", () => {
+    expect(gitAgent).toContain('requireCapability(this.env, request.projectId, "git")');
+  });
+
+  it("DeployAgent проверяет deploy перед repository_dispatch", () => {
+    const gate = deployAgent.indexOf('requireCapability(this.env, request.projectId, "deploy")');
+    const dispatch = deployAgent.indexOf("/dispatches");
+    expect(gate).toBeGreaterThanOrEqual(0);
+    expect(dispatch).toBeGreaterThan(gate);
+  });
+
+  it("QA read-only coverage доступен отдельно, внешние Actions требуют qa capability", () => {
+    const coverage = qaAgent.indexOf('op.type === "coverage_gaps"');
+    const gate = qaAgent.indexOf('requireCapability(this.env, request.projectId, "qa")');
+    expect(coverage).toBeGreaterThanOrEqual(0);
+    expect(gate).toBeGreaterThan(coverage);
+  });
+
+  it("Advanced читает effective permissions через project-scoped endpoint", () => {
+    expect(api).toMatch(/\/api\/projects\\\/\(\[\^\/\]\+\)\\\/permissions/);
+    expect(client).toContain("/permissions");
+    expect(client).toContain("Deploy capability");
+  });
+});
