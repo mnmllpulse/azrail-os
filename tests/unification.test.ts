@@ -61,7 +61,7 @@ describe("Pulse Shell security invariants", () => {
   });
 
   it("глобус изолирован отдельным документом и не блокирует composer", () => {
-    expect(shell).toContain('src="/pulse-globe.html"');
+    expect(shell).toContain('data-src="/pulse-globe.html"');
     expect(shell).toContain('id="composer"');
     expect(shell).toContain('src="/pulse.js"');
   });
@@ -345,5 +345,27 @@ describe("Staging isolation", () => {
     expect(guard).toContain("REPLACE_[A-Z0-9_]+");
     expect(guard).toContain("Staging D1 must not equal production D1");
     expect(guard).toContain("Staging R2 must not equal production R2");
+  });
+});
+
+
+describe("Presence ownership and deferred Globe", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const index = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+
+  it("не связывает heartbeat с чужим Project", () => {
+    const start = index.indexOf('url.pathname === "/api/presence" && request.method === "POST"');
+    const block = index.slice(start, start + 900);
+    expect(block).toContain('requireResource(env, principal, "project", presenceProject)');
+    expect(block.indexOf("requireResource")).toBeLessThan(block.indexOf("heartbeatPresence"));
+  });
+
+  it("грузит Globe после первичного UI paint", () => {
+    expect(shell).toContain('data-src="/pulse-globe.html"');
+    expect(shell).not.toContain('id="pulseGlobe" src="/pulse-globe.html"');
+    expect(client).toContain("function loadGlobe()");
+    expect(client).toContain("requestIdleCallback");
   });
 });
