@@ -9,3 +9,6 @@ coverage/
 .dev.vars
 .work/
 backups/
+
+# Local Cloudflare staging config with real resource IDs
+wrangler.staging.toml
