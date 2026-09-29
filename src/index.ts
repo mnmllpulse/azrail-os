@@ -390,6 +390,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // regional coordinates from Cloudflare request metadata.
     if (url.pathname === "/api/presence" && request.method === "POST") {
       try {
+        const presenceProject = typeof parsedBody.projectId === "string" && parsedBody.projectId
+          ? parsedBody.projectId
+          : null;
+        if (presenceProject) await requireResource(env, principal, "project", presenceProject);
         const heartbeat = await heartbeatPresence(env, principal, requestCf, parsedBody);
         return json({ success: true, heartbeat }, env);
       } catch (err) {
