@@ -35,3 +35,31 @@ describe("Project-first input validation", () => {
     expect(() => validateProjectDescription("x".repeat(2001))).toThrow();
   });
 });
+
+
+describe("Pulse Shell security invariants", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const root = path.resolve(import.meta.dirname, "..");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+
+  it("не хранит access token в localStorage или URL", () => {
+    expect(client).not.toContain("localStorage");
+    expect(client).not.toMatch(/[?&](token|access_token)=/);
+    expect(client).toContain("sessionStorage");
+  });
+
+  it("использует только AZRAIL facade для mission/project flow", () => {
+    expect(client).toContain("/api/azrail/projects");
+    expect(client).toContain("/api/azrail/mission");
+    expect(client).toContain("/api/azrail/me");
+    expect(client).not.toContain("location.href='/ultimate.html?");
+  });
+
+  it("глобус изолирован отдельным документом и не блокирует composer", () => {
+    expect(shell).toContain('src="/pulse-globe.html"');
+    expect(shell).toContain('id="composer"');
+    expect(shell).toContain('src="/pulse.js"');
+  });
+});
