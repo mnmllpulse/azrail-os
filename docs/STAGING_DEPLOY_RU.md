@@ -1,5 +1,17 @@
 # AZRAIL OS — безопасный staging deploy
 
+## Целевая Wrangler-модель
+
+Cloudflare рекомендует для постоянных окружений использовать Wrangler environments. После того как staging D1/KV/R2 реально созданы и их IDs известны, канонический вариант должен быть перенесён в основной Wrangler source of truth под `[env.staging]`, а команды — использовать `--env staging`.
+
+Пока Cloudflare account context не подключён к рабочему процессу, в репозитории используется `wrangler.staging.toml.example`: это bootstrap-шаблон, который специально не содержит production IDs и не делает основной `wrangler.toml` невалидным placeholders.
+
+После появления staging IDs:
+1. перенести staging bindings в `[env.staging]`;
+2. проверить, что bindings/vars объявлены явно — они не наследуются автоматически;
+3. заменить staging npm-команды на `wrangler ... --env staging`;
+4. удалить отдельный локальный staging config после успешной миграции.
+
 Цель: развернуть отдельный Cloudflare Worker без использования production D1/KV/R2.
 
 ## 0. Принцип
@@ -81,8 +93,16 @@ Dry run не заменяет D1 migration и не доказывает дост
 
 ## 8. Deploy
 
+Bootstrap-вариант до переноса в Wrangler environment:
+
 ```bash
 npm run staging:deploy
+```
+
+Целевой вариант после добавления `[env.staging]` в основной Wrangler config:
+
+```bash
+npx wrangler deploy --env staging
 ```
 
 После первого deploy записать фактический staging URL. Если API вызывается только из UI того же Worker, same-origin запросы работают без cross-origin CORS.
