@@ -12,6 +12,7 @@ cached('azrail_pulse_presence',presenceSession);
 let mode=cached('azrail_pulse_mode')||'auto';
 let projectsCache=[];
 let knownProjects=[];
+let studioCatalogData=null;
 const labels={accepted:'Принято',queued:'В очереди',planning:'Планирование',executing:'Выполнение',verifying:'Проверка',checking:'Проверка',repairing:'Исправление',waiting_approval:'Нужно решение',completed:'Готово',done:'Готово',failed:'Ошибка',cancelled:'Остановлено'};
 function notice(t){$('notice').textContent=t||'';}
 function headers(json,key){const h={Authorization:'Bearer '+token};if(json)h['Content-Type']='application/json';if(key)h['Idempotency-Key']=key;return h;}
@@ -209,6 +210,53 @@ async function openProjects(){
 }
 function closeProjects(){$('projectsPanel').hidden=true;}
 
+
+async function loadStudioCatalog(){
+  if(studioCatalogData)return studioCatalogData;
+  const r=await fetch('/pulse-studios.json',{cache:'no-store'});
+  if(!r.ok)throw new Error('Не удалось загрузить каталог Studio/Labs.');
+  const d=await r.json();
+  studioCatalogData=Array.isArray(d.studios)?d.studios:[];
+  return studioCatalogData;
+}
+function catalogChip(text){
+  const el=document.createElement('span');el.className='catalog-chip';el.textContent=text;return el;
+}
+function renderStudioCatalog(kind){
+  const grid=$('studioCatalogGrid');grid.replaceChildren();
+  const items=(studioCatalogData||[]).filter(x=>kind==='lab'?x.kind==='lab':x.kind!=='lab');
+  $('studioCatalogTitle').textContent=kind==='lab'?'LABS':'STUDIO';
+  if(!items.length){grid.append(workspaceEmpty('Нет доступных направлений.'));return;}
+  items.forEach((item,index)=>{
+    const card=document.createElement('article');card.className='catalog-card';
+    const num=document.createElement('span');num.className='catalog-index';num.textContent=String(index+1).padStart(2,'0');
+    const title=document.createElement('h3');title.textContent=item.title||item.id;
+    const desc=document.createElement('p');desc.textContent=item.description||'';
+    const meta=document.createElement('div');meta.className='catalog-meta';
+    meta.append(catalogChip(String(item.mode||'auto').toUpperCase()));
+    meta.append(catalogChip(String(item.status||'planned').toUpperCase()));
+    meta.append(catalogChip(String(Array.isArray(item.modules)?item.modules.length:0)+' MODULES'));
+    const modules=document.createElement('ul');modules.className='catalog-modules';
+    for(const name of (item.modules||[])){const li=document.createElement('li');li.textContent=name;modules.append(li);}
+    const run=document.createElement('button');run.type='button';run.className='catalog-run';run.textContent='Использовать →';
+    run.addEventListener('click',()=>{
+      $('idea').value=item.prompt||'';
+      setMode(item.mode||'auto');
+      closeStudioCatalog();
+      $('idea').focus();
+      notice((item.kind==='lab'?'Лаборатория ':'Студия ')+(item.title||item.id)+' подготовила запрос. Отредактируйте его или запускайте.');
+    });
+    card.append(num,title,desc,meta,modules,run);grid.append(card);
+  });
+}
+async function openStudioCatalog(kind){
+  try{
+    await loadStudioCatalog();
+    renderStudioCatalog(kind);
+    $('studioCatalog').hidden=false;
+  }catch(e){notice(e.message);}
+}
+function closeStudioCatalog(){$('studioCatalog').hidden=true;}
 function renderMission(d){
   $('mission').hidden=false;const m=d.mission||{};
   $('missionTitle').textContent=m.goal||m.title||'AZRAIL mission';
@@ -236,6 +284,10 @@ $('composer').addEventListener('submit',async e=>{
 });
 for(const b of document.querySelectorAll('[data-mode]'))b.addEventListener('click',()=>setMode(b.dataset.mode));
 setMode(mode);
+$('studiosOpen').addEventListener('click',()=>openStudioCatalog('studio'));
+$('labsOpen').addEventListener('click',()=>openStudioCatalog('lab'));
+$('studioCatalogClose').addEventListener('click',closeStudioCatalog);
+$('studioCatalog').addEventListener('click',e=>{if(e.target===$('studioCatalog'))closeStudioCatalog();});
 $('projectsOpen').addEventListener('click',openProjects);
 $('projectsClose').addEventListener('click',closeProjects);
 $('projectsPanel').addEventListener('click',e=>{if(e.target===$('projectsPanel'))closeProjects();});
