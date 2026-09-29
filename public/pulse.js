@@ -12,6 +12,8 @@ cached('azrail_pulse_presence',presenceSession);
 let mode=cached('azrail_pulse_mode')||'auto';
 let projectsCache=[];
 let knownProjects=[];
+let studioRegistry=[];
+let activeCapability=null;
 let studioCatalogData=null;
 const labels={accepted:'Принято',queued:'В очереди',planning:'Планирование',executing:'Выполнение',verifying:'Проверка',checking:'Проверка',repairing:'Исправление',waiting_approval:'Нужно решение',completed:'Готово',done:'Готово',failed:'Ошибка',cancelled:'Остановлено'};
 function notice(t){$('notice').textContent=t||'';}
@@ -144,6 +146,58 @@ async function openProjects(){
   catch(e){if(e.status===401){$('projectsPanel').hidden=true;openAccess(e.message);}else{$('projectDescription').textContent=e.message;}}
 }
 function closeProjects(){$('projectsPanel').hidden=true;}
+async function loadStudioRegistry(){
+  if(studioRegistry.length)return studioRegistry;
+  const r=await fetch('/pulse-studios.json',{cache:'no-store'});
+  if(!r.ok)throw new Error('Каталог Studio/Labs недоступен.');
+  const d=await r.json();
+  studioRegistry=Array.isArray(d.studios)?d.studios:[];
+  return studioRegistry;
+}
+function selectCapability(item){
+  activeCapability=item;
+  $('capabilityName').textContent=item?.title||'Studio';
+  $('capabilityDescription').textContent=item?.description||'';
+  const meta=$('capabilityMeta');meta.replaceChildren();
+  for(const value of [String(item?.kind||'studio').toUpperCase(),String(item?.mode||'auto').toUpperCase(),String(item?.status||'')]){
+    if(!value)continue;
+    const pill=document.createElement('span');pill.className='catalog-pill';pill.textContent=value;meta.append(pill);
+  }
+  const modules=$('capabilityModules');modules.replaceChildren();
+  for(const name of item?.modules||[]){
+    const el=document.createElement('div');el.className='catalog-module';el.textContent=name;modules.append(el);
+  }
+  for(const b of document.querySelectorAll('.catalog-card'))b.classList.toggle('active',b.dataset.capability===item?.id);
+}
+function renderCapabilityCatalog(kind){
+  const list=$('capabilitiesList');list.replaceChildren();
+  const items=studioRegistry.filter(x=>x.kind===kind);
+  for(const item of items){
+    const button=document.createElement('button');button.type='button';button.className='catalog-card';button.dataset.capability=item.id;
+    const title=document.createElement('b');title.textContent=item.title;
+    const desc=document.createElement('span');desc.textContent=item.description||'';
+    button.append(title,desc);button.addEventListener('click',()=>selectCapability(item));list.append(button);
+  }
+  selectCapability(items[0]||null);
+}
+async function openCapabilityCatalog(kind){
+  try{
+    await loadStudioRegistry();
+    $('capabilitiesTitle').textContent=kind==='lab'?'LABS':'STUDIO';
+    renderCapabilityCatalog(kind);
+    $('capabilitiesPanel').hidden=false;
+  }catch(e){notice(e.message);}
+}
+function closeCapabilityCatalog(){$('capabilitiesPanel').hidden=true;}
+function launchCapability(){
+  if(!activeCapability)return;
+  if(activeCapability.mode)setMode(activeCapability.mode);
+  $('idea').value=activeCapability.prompt||'';
+  closeCapabilityCatalog();
+  $('idea').focus();
+  notice((activeCapability.title||'Studio')+' подготовлена. Уточните задачу и нажмите CREATE.');
+}
+
 function workspaceRow(title,meta){
   const row=document.createElement('div');row.className='workspace-row';
   const b=document.createElement('b');b.textContent=title||'—';row.append(b);
