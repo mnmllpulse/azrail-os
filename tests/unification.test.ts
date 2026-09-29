@@ -292,3 +292,26 @@ describe("Measured System observability", () => {
     expect(system).not.toMatch(/innerHTML\s*=/);
   });
 });
+
+
+describe("Canonical Pulse entrypoint", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const index = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+  const wrangler = fs.readFileSync(path.join(root, "wrangler.toml"), "utf8");
+
+  it("отдаёт Pulse на корне и HTML fallback", () => {
+    expect(index).toContain('incomingUrl.pathname === "/"');
+    expect(index).toContain('new URL("/pulse.html", incomingUrl)');
+    expect(index).toContain('new URL("/pulse.html", url)');
+  });
+
+  it("запускает Worker первым только для root и API", () => {
+    expect(wrangler).toContain('run_worker_first = [ "/", "/api/*" ]');
+  });
+
+  it("сохраняет legacy и advanced assets", () => {
+    expect(fs.existsSync(path.join(root, "public/index.html"))).toBe(true);
+    expect(fs.existsSync(path.join(root, "public/ultimate.html"))).toBe(true);
+    expect(fs.existsSync(path.join(root, "public/pulse.html"))).toBe(true);
+  });
+});
