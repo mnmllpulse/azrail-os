@@ -77,5 +77,5 @@ export async function authorizeRequest(env:Env,p:Principal,request:Request,body:
     if(!row || row.conversation_id!==(conversation??project)) throw new AccessError("Сообщение недоступно.",404);
     await requireResource(env,p,"conversation",row.conversation_id);
   }
-  if(p.role!=="admin" && (body.gitOp || body.qaOp || body.commitToBranch || body.inputType==="github" || body.intent==="deploy")) throw new AccessError("Интеграции доступны только администратору.");
+  if(p.role!=="admin" && (body.gitOp || body.qaOp || body.deployOp || body.commitToBranch || body.inputType==="github" || body.intent==="deploy")) throw new AccessError("Интеграции доступны только администратору.");
 }
