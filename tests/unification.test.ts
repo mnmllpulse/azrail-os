@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { canonicalApiPath } from "../src/protocol/facade";
 import { validateProjectDescription, validateProjectName } from "../src/lib/projects-api";
-import { capabilitiesForMode, defaultIterationsForMode, normalizeRoutingMode, tierPreferenceForMode } from "../src/lib/routing-mode";
+import { capabilitiesForMode, defaultIterationsForMode, normalizeRoutingMode, tierPreferenceForMode } from "../src/lib/routing-mode";\nimport { validateJsonObject } from "../src/lib/request-body";
 
 describe("Pulse OS → AZRAIL facade", () => {
   it("нормализует mission API до старого защищённого маршрута", () => {
@@ -231,5 +231,42 @@ describe("Agent capability defense-in-depth", () => {
     expect(api).toMatch(/\/api\/projects\\\/\(\[\^\/\]\+\)\\\/permissions/);
     expect(client).toContain("/permissions");
     expect(client).toContain("Deploy capability");
+  });
+});
+
+
+describe("Explicit deploy boundary", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const deployAgent = fs.readFileSync(path.join(root, "src/agents/deploy-agent.ts"), "utf8");
+  const staging = fs.readFileSync(path.join(root, "wrangler.staging.toml.example"), "utf8");
+
+  it("принимает только staging или production environment", () => {
+    expect(() => validateJsonObject({
+      deployOp: { type: "trigger_ci", environment: "staging" },
+    })).not.toThrow();
+
+    expect(() => validateJsonObject({
+      deployOp: { type: "trigger_ci", environment: "preview" },
+    })).toThrow();
+  });
+
+  it("не запускает внешний CI только по intent=deploy", () => {
+    const operationGate = deployAgent.indexOf('deployOp.type !== "trigger_ci"');
+    const dispatch = deployAgent.indexOf("/dispatches");
+    expect(operationGate).toBeGreaterThanOrEqual(0);
+    expect(dispatch).toBeGreaterThan(operationGate);
+  });
+
+  it("production требует двойное подтверждение", () => {
+    const confirmation = deployAgent.indexOf("op.confirmProduction !== true");
+    const serverFlag = deployAgent.indexOf('AZRAIL_ALLOW_PRODUCTION_DEPLOY !== "true"');
+    const dispatch = deployAgent.indexOf("/dispatches");
+    expect(confirmation).toBeGreaterThanOrEqual(0);
+    expect(serverFlag).toBeGreaterThanOrEqual(0);
+    expect(dispatch).toBeGreaterThan(serverFlag);
+  });
+
+  it("staging никогда не включает production deploy", () => {
+    expect(staging).toContain('AZRAIL_ALLOW_PRODUCTION_DEPLOY = "false"');
   });
 });
