@@ -1,5 +1,6 @@
 // AZRAIL — общие типы
 import type { Orchestrator } from "./agents/orchestrator";
+import type { RoutingMode } from "./lib/routing-mode";
 
 export interface Env {
   AZRAIL_FORCE_FREE?: string;
@@ -176,6 +177,8 @@ export interface TaskRequest {
   /** Явный слаг модели из реестра — обходит автоматический выбор по тиру.
    *  См. RunOptions.preferredModel в lib/model-router.ts за причиной. */
   preferredModel?: string;
+  /** Профиль маршрутизации из простого UI; не является выбором конкретной модели. */
+  preferredMode?: RoutingMode;
   /** Диалог, к которому относится задача. Хранится в D1 (lib/chat-store.ts),
    *  а не в памяти конкретного Durable Object: диалогов много, и они должны
    *  переживать выгрузку объекта. */

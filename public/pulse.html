@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09080f">
+<title>DARK MNMLL PULSE OS — Intelligence That Moves the Planet</title>
+<style>
+:root{color-scheme:dark;--bg:#09080f;--panel:rgba(19,16,29,.78);--line:#292333;--text:#f5f2fb;--muted:#aaa1b8;--accent:#b497f4;font:15px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text)}button,textarea,a{font:inherit}button{color:inherit}
+.globe{position:fixed;inset:0;border:0;width:100%;height:100%;z-index:0;opacity:.88}
+.scrim{position:fixed;inset:0;z-index:1;pointer-events:none;background:linear-gradient(90deg,rgba(9,8,15,.98) 0 16%,rgba(9,8,15,.62) 34%,rgba(9,8,15,.18) 62%,rgba(9,8,15,.58) 100%)}
+.rail{position:fixed;z-index:3;inset:0 auto 0 0;width:210px;border-right:1px solid var(--line);background:rgba(9,8,15,.88);backdrop-filter:blur(20px);padding:30px 20px;display:flex;flex-direction:column}
+.brand{font-weight:700;letter-spacing:.2em}.brand small{display:block;margin-top:5px;font-size:9px;color:var(--muted);letter-spacing:.13em;font-weight:500}
+nav{margin-top:58px;display:grid;gap:7px}nav a{color:var(--muted);text-decoration:none;padding:11px 13px;border-radius:10px}nav a.active{background:#20182f;color:#e7ddf8}.bottom{margin-top:auto;color:var(--muted);font-size:11px;display:grid;gap:10px}
+main{position:relative;z-index:2;margin-left:210px;min-height:100vh;display:grid;place-items:center;padding:40px}
+.hero{width:min(820px,100%);text-align:center;margin-top:4vh}
+.eyebrow{font-size:10px;letter-spacing:.24em;color:var(--muted);text-transform:uppercase}
+h1{font-size:clamp(42px,6vw,76px);font-weight:470;letter-spacing:-.045em;line-height:1.02;margin:22px 0 14px}h1 span{color:#c3adeb}
+.lead{color:var(--muted);max-width:620px;margin:0 auto 28px}
+.composer{background:linear-gradient(130deg,rgba(24,19,32,.93),rgba(16,14,23,.88));border:1px solid rgba(180,151,244,.28);border-radius:20px;padding:18px;box-shadow:0 20px 80px rgba(0,0,0,.28);backdrop-filter:blur(18px);text-align:left}
+textarea{width:100%;min-height:96px;max-height:250px;resize:vertical;border:0;outline:0;background:transparent;color:var(--text);font-size:17px;line-height:1.6}
+textarea::placeholder{color:#9c91aa}.compose-row{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:10px}.modes{display:flex;gap:7px;flex-wrap:wrap}.mode{font-size:10px;color:var(--muted);border:1px solid var(--line);background:rgba(9,8,15,.42);border-radius:999px;padding:7px 10px;cursor:pointer}.mode.active{color:#160c28;background:var(--accent);border-color:var(--accent)}.create{border:0;border-radius:12px;background:var(--accent);color:#170d29;font-weight:700;min-height:44px;padding:0 18px;cursor:pointer}
+.progress{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:18px}.step{font-size:10px;color:#82798f;border-top:1px solid #30283b;padding-top:9px}.step.active{color:#d9c8fa;border-color:#8e70ca}.step.done{color:#c9b5ee;border-color:#604a84}
+.meta{display:flex;justify-content:center;gap:18px;margin-top:22px;color:var(--muted);font-size:10px;letter-spacing:.08em}
+@media(max-width:760px){.rail{position:fixed;inset:0 0 auto 0;width:auto;height:68px;padding:14px 16px;flex-direction:row;align-items:center}.brand small,.bottom{display:none}nav{margin:0 0 0 auto;display:flex}nav a{padding:8px}.scrim{background:linear-gradient(rgba(9,8,15,.45),rgba(9,8,15,.78))}main{margin-left:0;padding:100px 18px 26px}.hero{margin-top:0}.lead{font-size:14px}.progress{grid-template-columns:1fr}.step:not(:first-child){display:none}.modes{display:none}}
+.access{position:fixed;z-index:8;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.68);backdrop-filter:blur(12px)}.access[hidden]{display:none}.access-card{width:min(460px,calc(100% - 30px));padding:24px;border:1px solid #3d314e;border-radius:20px;background:#13101d;box-shadow:0 25px 90px #0008}.access-card h2{margin:0 0 8px;font-size:22px}.access-card p{color:var(--muted);font-size:13px}.access-card input{width:100%;margin-top:12px;padding:12px;border-radius:10px;border:1px solid #3d314e;background:#0d0a13;color:var(--text)}.access-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}.ghost{background:transparent;border:1px solid var(--line);border-radius:10px;padding:10px 14px}.mission{margin-top:18px;padding:16px 18px;border:1px solid rgba(180,151,244,.18);border-radius:16px;background:rgba(13,10,19,.58);backdrop-filter:blur(14px);text-align:left}.mission[hidden]{display:none}.mission-head{display:flex;justify-content:space-between;gap:16px;align-items:center}.mission strong{font-size:13px}.mission-state{font-size:10px;letter-spacing:.13em;color:var(--accent)}.mission ol{margin:13px 0 0;padding-left:20px;color:var(--muted);font-size:12px}.result{white-space:pre-wrap;margin-top:12px;font-size:13px;color:#d9d0e5}.notice{min-height:20px;margin-top:13px;color:#bcb0ca;font-size:11px}button:disabled{opacity:.45;cursor:not-allowed}
+</style>
+</head>
+<body>
+<iframe class="globe" src="/pulse-globe.html" title="Pulse Global Intelligence Network"></iframe>
+<div class="scrim"></div>
+<aside class="rail">
+  <div class="brand">AZRAIL <small>DARK MNMLL PULSE OS</small></div>
+  <nav>
+    <a class="active" href="/pulse.html">CREATE</a>
+    <a href="/ultimate.html#studio">STUDIO</a>
+    <a href="/ultimate.html#projects">PROJECTS</a>
+    <a href="/ultimate.html#labs">LABS</a>
+  </nav>
+  <div class="bottom"><span>GLOBAL INTELLIGENCE CORE</span><span>∞ SYSTEM ONLINE</span></div>
+</aside>
+<main>
+  <section class="hero">
+    <div class="eyebrow">Intelligence That Moves the Planet</div>
+    <h1>Что <span>создать?</span></h1>
+    <p class="lead">Опиши результат. AZRAIL сам выберет агентов, модели, инструменты, проверку и путь выполнения.</p>
+    <form class="composer" id="composer">
+      <textarea id="idea" placeholder="Например: проанализируй репозиторий, исправь ошибки, проверь тесты и подготовь deploy…" aria-label="Опиши задачу"></textarea>
+      <div class="compose-row">
+        <div class="modes" id="modes"><button class="mode active" type="button" data-mode="auto">AUTO</button><button class="mode" type="button" data-mode="fast">FAST</button><button class="mode" type="button" data-mode="balanced">BALANCED</button><button class="mode" type="button" data-mode="deep">DEEP</button><button class="mode" type="button" data-mode="creative">CREATIVE</button><button class="mode" type="button" data-mode="code">CODE</button></div>
+        <button class="create" id="createButton" type="submit">CREATE →</button>
+      </div>
+    </form>
+    <div class="progress" id="progress"><div class="step active" data-stage="0">UNDERSTAND</div><div class="step" data-stage="1">ARCHITECTURE</div><div class="step" data-stage="2">EXECUTE</div><div class="step" data-stage="3">VERIFY</div><div class="step" data-stage="4">RESULT</div></div>
+    <div class="meta"><span>ONE ORCHESTRATOR</span><span>AUTO ROUTING</span><span>VERIFIED OUTPUT</span></div>
+    <section class="mission" id="mission" hidden><div class="mission-head"><strong id="missionTitle">Миссия</strong><span class="mission-state" id="missionState">QUEUED</span></div><ol id="missionSteps"></ol><div class="result" id="missionResult"></div></section>
+    <div class="notice" id="notice"></div>
+  </section>
+</main>
+<div class="access" id="access" hidden><div class="access-card"><h2>Подключить AZRAIL</h2><p>Введите ключ доступа. Он сохраняется только в текущей вкладке через sessionStorage.</p><input id="accessKey" type="password" autocomplete="off" placeholder="az_… или bootstrap token"><div class="access-actions"><button class="ghost" id="accessClose" type="button">Позже</button><button class="create" id="accessConnect" type="button">Подключить</button></div><div class="notice" id="accessNotice"></div></div></div>
+<script src="/pulse.js" defer></script>
+</body>
+</html>

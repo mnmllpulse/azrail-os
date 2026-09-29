@@ -17,6 +17,7 @@ import { sliceFile, WorkingSet, type FileWindow } from "./file-window";
 import { checkEdit } from "./syntax-guard";
 import { MUTATING_TOOLS } from "./mission-guard";
 import { clampIterations, planStepCap } from "../lib/mission-limits";
+import type { RoutingMode } from "../lib/routing-mode";
 import { recallContext, rememberFact } from "../lib/memory-agent";
 import { UsageLedger, renderUsage } from "../lib/usage";
 import {
@@ -48,6 +49,8 @@ export interface ExecutionContext {
   /** Явно закреплённая пользователем модель. Проходит насквозь в каждое
    *  решение цикла — иначе выбор модели действовал бы только на первый шаг. */
   preferredModel?: string;
+  /** Простой профиль UI; влияет на порядок классов моделей, но не обходит policy/capabilities. */
+  routingMode?: RoutingMode;
   /**
    * Копилка расхода моделей за миссию.
    *
@@ -252,7 +255,7 @@ export class ExecutionEngine {
               this.env,
               "chat",
               { messages: [{ role: "user", content: String(input.prompt ?? "") }] },
-              { preferredModel: ctx.preferredModel, ledger: ctx.usage },
+              { preferredModel: ctx.preferredModel, mode: ctx.routingMode, ledger: ctx.usage },
             )
           ).output,
         );
@@ -596,7 +599,7 @@ export class ExecutionEngine {
           this.env,
           "scout",
           { messages: [{ role: "system", content: system }, { role: "user", content: prompt }] },
-          { preferredModel: ctx.preferredModel, ledger: ctx.usage },
+          { preferredModel: ctx.preferredModel, mode: ctx.routingMode, ledger: ctx.usage },
         );
         return extractText(routed.output);
       };
@@ -1272,7 +1275,7 @@ export class ExecutionEngine {
         ],
       },
       {
-        preferredModel: ctx.preferredModel,
+        preferredModel: ctx.preferredModel, mode: ctx.routingMode,
           ledger: ctx.usage,
         // Ответ без разбираемого JSON бесполезен: из него нельзя достать ни
         // инструмент, ни признак завершения. Проверка структурная и
@@ -1377,7 +1380,7 @@ export class ExecutionEngine {
             },
           ],
         },
-        { preferredModel: ctx.preferredModel, ledger: ctx.usage },
+        { preferredModel: ctx.preferredModel, mode: ctx.routingMode, ledger: ctx.usage },
       );
       // Промпт просит не больше N шагов, но модель может не послушаться —
       // режем в коде, иначе запас на исправления снова съедается планом.
@@ -1425,7 +1428,7 @@ export class ExecutionEngine {
           },
         ],
       },
-      { preferredModel: ctx.preferredModel, ledger: ctx.usage },
+      { preferredModel: ctx.preferredModel, mode: ctx.routingMode, ledger: ctx.usage },
     );
 
     // Жёсткая обрезка: лимит в промпте — просьба, а не гарантия.
