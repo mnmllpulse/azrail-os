@@ -45,6 +45,7 @@ import { syncWorkspaceToSandbox } from "./core/workspace-sync";
 import { normalizeAzrailRequest } from "./protocol/facade";
 import { defaultIterationsForMode, normalizeRoutingMode } from "./lib/routing-mode";
 import { createProject as createProjectApi, getProject as getProjectApi, listProjects as listProjectsApi, updateProject as updateProjectApi } from "./lib/projects-api";
+import { heartbeatPresence, listPresence } from "./lib/presence";
 
 export { Orchestrator };
 
@@ -356,6 +357,29 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           );
         }
       }
+    }
+
+    // ─── Pulse Globe presence ─────────────────────────────────────────
+    // Heartbeat is authenticated and intentionally stores only coarse
+    // regional coordinates from Cloudflare request metadata.
+    if (url.pathname === "/api/presence" && request.method === "POST") {
+      try {
+        const heartbeat = await heartbeatPresence(env, principal, request, parsedBody);
+        return json({ success: true, heartbeat }, env);
+      } catch (err) {
+        if (err instanceof TypeError) return json({ error: err.message }, env, 400);
+        throw err;
+      }
+    }
+
+    if (url.pathname === "/api/presence" && request.method === "GET") {
+      const sessionId = url.searchParams.get("sessionId") ?? "";
+      const projectId = url.searchParams.get("projectId") ?? undefined;
+      return json({
+        success: true,
+        sessions: await listPresence(env, principal, sessionId, projectId),
+        precision: "regional",
+      }, env);
     }
 
     // ─── Project-first API ───────────────────────────────────────────
