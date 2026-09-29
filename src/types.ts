@@ -41,6 +41,8 @@ export interface Env {
   // Секреты (wrangler secret put) — опциональны
   GITHUB_TOKEN?: string;
   GITHUB_REPO?: string;
+  /** Production deploy остаётся заблокирован, пока этот серверный флаг не включён явно. */
+  AZRAIL_ALLOW_PRODUCTION_DEPLOY?: string;
 
   /** Токен доступа к платным эндпоинтам. Без него они закрыты (fail-closed). */
   AZRAIL_TOKEN?: string;
@@ -90,6 +92,10 @@ export type QaOperation =
   | { type: "latest_run"; workflow?: string; branch?: string }
   /** Джобы конкретного прогона с упавшими шагами */
   | { type: "check_run"; runId: number };
+
+export type DeployOperation =
+  | { type: "check_readiness" }
+  | { type: "trigger_ci"; environment: "staging" | "production"; confirmProduction?: boolean };
 
 export type GitOperation =
   | { type: "create_branch"; branch: string; from?: string }
@@ -170,6 +176,8 @@ export interface TaskRequest {
   gitOp?: GitOperation;
   /** Структурная QA-операция. По умолчанию coverage_gaps */
   qaOp?: QaOperation;
+  /** Внешний deploy никогда не выводится только из intent: требуется явная структурная операция. */
+  deployOp?: DeployOperation;
   /** Направление по стилю/бренду для UI Agent. Приоритетнее его собственных предпочтений */
   designBrief?: string;
   /** Если задано — сгенерированные UI-файлы коммитятся в эту ветку через Git Agent */
