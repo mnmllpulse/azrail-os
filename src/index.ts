@@ -44,6 +44,7 @@ import { runInContainer, detectBackend } from "./core/sandbox";
 import { syncWorkspaceToSandbox } from "./core/workspace-sync";
 import { normalizeAzrailRequest } from "./protocol/facade";
 import { defaultIterationsForMode, normalizeRoutingMode } from "./lib/routing-mode";
+import { modeForStudio, normalizePreferredStudio, routeStudio } from "./lib/studio-router";
 import { createProject as createProjectApi, getProject as getProjectApi, listProjects as listProjectsApi, updateProject as updateProjectApi } from "./lib/projects-api";
 import { heartbeatPresence, listPresence } from "./lib/presence";
 import { loadProjectWorkspace } from "./lib/project-workspace";
@@ -678,6 +679,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         maxIterations?: number;
         preferredModel?: string;
         preferredMode?: unknown;
+        preferredStudio?: unknown;
         attachments?: AttachmentRef[];
       };
       let goal = body.message?.trim();
@@ -723,14 +725,16 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
        * одного полного прогона моделей, и заметить это можно было только
        * по счёту. Ключ необязателен: без него поведение прежнее. */
       const missionId = crypto.randomUUID();
-      const preferredMode = normalizeRoutingMode(body.preferredMode);
+      const studioRoute = routeStudio(goal, normalizePreferredStudio(body.preferredStudio));
+      const requestedMode = normalizeRoutingMode(body.preferredMode);
+      const preferredMode = requestedMode === "auto" ? modeForStudio(studioRoute.studio) : requestedMode;
       const maxIterations = clampIterations(body.maxIterations ?? defaultIterationsForMode(preferredMode));
 
       // Эта запись ОБЯЗАНА пройти, и падать здесь правильно: без строки в
       // missions миссию нечем отслеживать и не к чему привязать события.
       // Отказ ДО работы дешевле, чем осиротевший прогон, потративший модели.
       try {
-        if (!await createMission(env, missionId, body.projectId, goal, {maxIterations,preferredModel:body.preferredModel,preferredMode,publicHostname:url.hostname})) {
+        if (!await createMission(env, missionId, body.projectId, goal, {maxIterations,preferredModel:body.preferredModel,preferredMode,preferredStudio:studioRoute.studio,publicHostname:url.hostname})) {
           return json({error:"В проекте уже выполняется миссия. Дождитесь завершения или отмените её.", code:"project_busy"},env,409);
         }
       } catch (err) {
@@ -773,6 +777,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           maxIterations,
           preferredModel: body.preferredModel,
           preferredMode,
+          // Studio — это маршрут возможностей, не отдельный runtime.
+          preferredStudio: studioRoute.studio,
           // Хост берётся ИЗ ЗАПРОСА: на своём домене предпросмотр должен
           // вести на него же, а не на workers.dev. Внутри фоновой задачи
           // запроса уже нет — значит, передать надо сейчас.
@@ -796,6 +802,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           success: true,
           missionId,
           status: "accepted",
+          studio: studioRoute,
+          routingMode: preferredMode,
           budget: { used: budget.used, limit: budget.limit, remaining: budget.remaining },
         },
         env,
