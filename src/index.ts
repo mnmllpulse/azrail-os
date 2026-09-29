@@ -17,7 +17,8 @@ import { describeRegistry, allCapabilities } from "./lib/agent-registry";
 import { describeTools } from "./lib/tool-registry";
 import { addMessage, deleteConversation, ensureConversation, listMessages } from "./lib/chat-store";
 import { listMissionEvents } from "./lib/event-store";
-import { MODEL_REGISTRY, providerIcon } from "./lib/model-registry";
+import { findModel, providerIcon } from "./lib/model-registry";
+import { addCustomModel, effectiveRegistry, listCustomModels, removeCustomModel, CustomModelError, type CustomModelInput } from "./lib/custom-models";
 import { clampIterations } from "./lib/mission-limits";
 import { extractText, runModel } from "./lib/model-router";
 import { UsageLedger } from "./lib/usage";
@@ -476,6 +477,42 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return orchestrator.fetch(forwarded);
     }
 
+    /* ПОДКЛЮЧЕНИЕ МОДЕЛИ ВРУЧНУЮ.
+     *
+     * Каталог Cloudflare пополняется еженедельно, а зашитый реестр
+     * правится релизами. Разрыв между ними означал, что модель, живая в
+     * аккаунте прямо сейчас, недоступна до следующего выпуска AZRAIL.
+     *
+     * Ворота не ослаблены: добавление разрешает модель ВЫБРАТЬ, а не
+     * потратить деньги. Платный вызов по-прежнему требует включённых
+     * сторонних моделей, настроенного Gateway, свежего тарифа и бюджета —
+     * см. policyModelCall. Проверка одна на всех, отдельной ветки для
+     * ручных моделей там нет и быть не должно.
+     *
+     * Права: маршрут под /api/admin/, значит закрыт общей проверкой роли
+     * в authorizeRequest. Второй проверки здесь намеренно нет — это было
+     * бы второе место, где её можно забыть обновить.
+     */
+    if (url.pathname === "/api/admin/models" && request.method === "GET") {
+      return json({models:await listCustomModels(env)},env);
+    }
+    if (url.pathname === "/api/admin/models" && request.method === "POST") {
+      try {
+        return json({model:await addCustomModel(env,parsedBody as unknown as CustomModelInput,principal.id)},env,201);
+      } catch (e) {
+        // Ошибка ввода — 400, а не 500: 500 отправляет чинить систему
+        // вместо того, чтобы исправить опечатку в слаге.
+        if (e instanceof CustomModelError) return json({error:e.message},env,400);
+        throw e;
+      }
+    }
+    if (url.pathname.startsWith("/api/admin/models/") && request.method === "DELETE") {
+      // Слаг в пути, а не в теле: тело разбирается только для POST.
+      const slug = decodeURIComponent(url.pathname.slice("/api/admin/models/".length));
+      try { return json(await removeCustomModel(env,slug),env); }
+      catch (e) { if (e instanceof CustomModelError) return json({error:e.message},env,400); throw e; }
+    }
+
     if (url.pathname === "/api/models" && request.method === "GET") {
       const policy = await readModelPolicy(env);
       // Список для выпадающего меню в интерфейсе. Раньше слаг вводился
@@ -485,11 +522,20 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return json(
         {
           success: true,
-          models: MODEL_REGISTRY.map((m) => ({
+          // effectiveRegistry, а не MODEL_REGISTRY: подключённые вручную
+          // модели обязаны быть видны в том же выборе. Список, в котором
+          // только что добавленной модели нет, читается как «не
+          // сохранилось».
+          models: (await effectiveRegistry(env)).map((m) => ({
             slug: m.slug,
             provider: m.provider,
             tier: m.tier,
             capabilities: m.capabilities,
+            // Признак происхождения. Проверенная каталогом запись и
+            // добавленная на слово не должны выглядеть одинаково — на
+            // этом различии держится всё правило реестра.
+            custom: !findModel(m.slug),
+            source: m.source,
             // Путь к статической иконке провайдера (public/icons/), либо null.
             icon: providerIcon(m.provider) ?? null,
             // Окно контекста для карточки модели. null = не проверено,

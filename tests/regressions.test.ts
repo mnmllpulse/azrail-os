@@ -943,7 +943,11 @@ describe("Новое: кнопки интерфейса", () => {
   it("список моделей приходит из того же реестра, что использует маршрутизатор", () => {
     const idx = src("src/index.ts");
     expect(idx).toContain('url.pathname === "/api/models"');
-    expect(idx).toContain("MODEL_REGISTRY.map");
+    // effectiveRegistry, а не MODEL_REGISTRY: с 0.8.2 тот же список
+    // включает подключённые вручную модели, и маршрутизатор
+    // (eligibleRegistry, findAnyModel) читает ровно его. Расхождение
+    // здесь означало бы выбор модели, которую нечем выполнить.
+    expect(idx).toContain("(await effectiveRegistry(env)).map");
     expect(idx).toMatch(/isProtected\s*=[\s\S]*?"\/api\/models"/);
     // Ключей и внутренней кухни наружу не отдаём.
     const block = idx.slice(idx.indexOf('url.pathname === "/api/models"'), idx.indexOf('url.pathname === "/api/stream"'));

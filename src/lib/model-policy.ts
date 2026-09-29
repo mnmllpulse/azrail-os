@@ -1,5 +1,6 @@
 import type { Env } from "../types";
-import { MODEL_REGISTRY, type ModelEntry } from "./model-registry";
+import { type ModelEntry } from "./model-registry";
+import { effectiveRegistry } from "./custom-models";
 import { meteredCall } from "./billing";
 
 // Explicit reviewed subset, NOT every @cf model: some hosted models require Paid.
@@ -60,7 +61,15 @@ export function modelBlockReason(model: ModelEntry, policy: ModelPolicy, env: Pi
 
 export async function eligibleRegistry(env: Env): Promise<ModelEntry[]> {
   const policy = await readModelPolicy(env);
-  return MODEL_REGISTRY.filter(m => !modelBlockReason(m, policy, env));
+  // effectiveRegistry, а не MODEL_REGISTRY: подключённые вручную модели
+  // обязаны участвовать и в автоматическом выборе тоже. Иначе «подключил
+  // модель» означало бы «могу закрепить её руками», но маршрутизатор о
+  // ней по-прежнему не знает — половина функции, которая выглядит как
+  // целая.
+  //
+  // Ворота при этом те же самые: фильтр ниже не изменился, и ручная
+  // модель отсеивается по modelBlockReason наравне со всеми.
+  return (await effectiveRegistry(env)).filter(m => !modelBlockReason(m, policy, env));
 }
 
 /** The only text-model provider boundary. Rechecked for EVERY attempt. */

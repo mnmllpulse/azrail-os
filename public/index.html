@@ -1010,6 +1010,19 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
 .mod-stat > div { display: grid; gap: 2px; }
 .mod-stat b { font-family: var(--display); font-size: 22px; font-weight: 700; }
 .mod-stat span { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+/* Возможности модели — набор переключателей, а не поле со списком через
+   запятую. Свободный ввод здесь означал бы опечатку, которая проходит
+   проверку формы и отсекает модель уже в маршрутизаторе, молча. */
+.mod-caps { display: flex; flex-wrap: wrap; gap: var(--s2); flex: 1; }
+.mod-caps label {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 7px 13px; font-size: 13px; color: var(--muted); cursor: pointer;
+  min-height: 38px;
+}
+.mod-caps label:has(input:checked) { border-color: rgba(152,112,255,.5); color: #e2d8ff; background: rgba(152,112,255,.10); }
+.mod-caps input { accent-color: var(--violet); margin: 0; }
+.mod-tile .tag.hand { color: #f0c97a; border-color: rgba(240,201,122,.38); }
 .mod-bad { color: var(--bad); }
 .mod-ok { color: var(--good); }
 @media (max-width: 650px) {
@@ -1559,6 +1572,45 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
         <button class="mini" id="policySave" disabled>Сохранить</button>
         <p class="note" id="policyHint">Менять политику может только владелец.</p>
       </div>
+    </div>
+
+    <!-- ПОДКЛЮЧИТЬ ЛЮБУЮ МОДЕЛЬ ВРУЧНУЮ.
+         Каталог Cloudflare пополняется еженедельно, зашитый реестр —
+         релизами. До этой формы модель, живая в аккаунте прямо сейчас,
+         была недоступна до следующего выпуска AZRAIL. -->
+    <div class="mod-card hidden" id="customCard">
+      <h3>Подключить модель вручную</h3>
+      <p class="note">Слаг копируется из живого каталога ниже или из документации провайдера. Модель, начинающаяся не с <code>@cf/</code>, пойдёт через AI Gateway — это определяется по слагу, отдельной галочки нет.</p>
+      <p class="note">Подключение разрешает модель <b>выбрать</b>. Платный вызов по-прежнему требует включённых сторонних моделей, настроенного Gateway, свежего тарифа и бюджета — те же ворота, что и для проверенных моделей.</p>
+      <div class="row">
+        <label class="label" for="cmSlug">Слаг</label>
+        <input type="text" id="cmSlug" placeholder="@cf/meta/llama-4-scout-17b-16e-instruct" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="row">
+        <label class="label" for="cmProvider">Провайдер</label>
+        <input type="text" id="cmProvider" placeholder="Meta" autocomplete="off">
+        <select id="cmTier" aria-label="Класс модели">
+          <option value="balanced">Класс: сбалансированная</option>
+          <option value="frontier">Класс: передовая</option>
+          <option value="fast">Класс: быстрая</option>
+        </select>
+      </div>
+      <div class="row">
+        <span class="label">Возможности</span>
+        <div class="mod-caps" id="cmCaps"></div>
+      </div>
+      <div class="row">
+        <label class="label" for="cmContext">Окно контекста</label>
+        <input type="number" id="cmContext" min="1" step="1" placeholder="пусто = не проверено">
+        <p class="note">Пустое поле означает «не проверено», а не «маленькое»: маршрутизатор по непроверенному окну не фильтрует.</p>
+      </div>
+      <div class="row">
+        <label class="label" for="cmSource">Источник данных</label>
+        <input type="text" id="cmSource" placeholder="например: живой каталог аккаунта, 2026-09-29" autocomplete="off">
+        <button class="mini" id="cmAdd">Подключить</button>
+        <p class="note">Через полгода это единственное, по чему будет видно, что перепроверять. Поле обязательно — то же правило, что и в проверенном реестре.</p>
+      </div>
+      <div id="customList"></div>
     </div>
 
     <div class="mod-card">
@@ -4895,6 +4947,121 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
       .then(function () { btn.disabled = false; });
   });
 
+  /* ─── Модели, подключённые вручную ────────────────────────────────── */
+
+  // Перечень совпадает с ModelCapability в src/lib/model-registry.ts.
+  // Расхождение поймает сервер: он отклоняет неизвестную возможность с
+  // её именем в тексте, а не молча выбрасывает.
+  var MODEL_CAPABILITIES = [
+    ['text_generation', 'текст'],
+    ['tool_calling', 'инструменты'],
+    ['reasoning', 'рассуждение'],
+    ['coding', 'код'],
+    ['vision', 'изображения на вход'],
+    ['image_generation', 'генерация изображений'],
+    ['embeddings', 'эмбеддинги'],
+    ['multilingual', 'многоязычность']
+  ];
+
+  (function buildCapabilityChips() {
+    var box = $('cmCaps');
+    MODEL_CAPABILITIES.forEach(function (c, i) {
+      var label = document.createElement('label');
+      var input = document.createElement('input');
+      input.type = 'checkbox';
+      input.value = c[0];
+      // Текстовая генерация отмечена заранее: она есть почти у всего, и
+      // пустая форма, которую сервер отклонит за «укажите хотя бы одну
+      // возможность», — лишний круг на ровном месте.
+      if (i === 0) input.checked = true;
+      var span = document.createElement('span');
+      span.textContent = c[1];
+      label.appendChild(input);
+      label.appendChild(span);
+      box.appendChild(label);
+    });
+  })();
+
+  function selectedCapabilities() {
+    var out = [];
+    Array.prototype.forEach.call($('cmCaps').querySelectorAll('input'), function (i) {
+      if (i.checked) out.push(i.value);
+    });
+    return out;
+  }
+
+  function removeCustomModel(slug) {
+    if (!window.confirm('Отключить модель «' + slug + '»? Задачи, где она закреплена, начнут отказывать.')) return;
+    api('/api/admin/models/' + encodeURIComponent(slug), { method: 'DELETE' })
+      .then(function (r) {
+        toast(r.removed ? 'Модель отключена.' : 'Такой модели в списке уже не было.');
+        loadCustomModels();
+        loadModelGrid();
+      })
+      .catch(function (e) { toast(e.message); });
+  }
+
+  function loadCustomModels() {
+    var box = $('customList');
+    if (noToken(box)) return;
+    api('/api/admin/models')
+      .then(function (d) {
+        var list = (d && d.models) || [];
+        modClear(box);
+        if (!list.length) {
+          modEmpty(box, 'Вручную пока ничего не подключено. Проверенный реестр работает и без этого.');
+          return;
+        }
+        list.forEach(function (m) {
+          modItem(box, m.slug,
+            m.provider + ' · ' + m.tier +
+            (m.contextWindow ? ' · ' + m.contextWindow : ' · окно не проверено') +
+            (m.requiresGateway ? ' · через Gateway' : '') +
+            ' · источник: ' + m.source, [
+            { label: 'Отключить', run: function () { removeCustomModel(m.slug); } }
+          ]);
+        });
+      })
+      .catch(function (e) { modFail(box, e); });
+  }
+
+  $('cmAdd').addEventListener('click', function () {
+    var btn = $('cmAdd');
+    var capabilities = selectedCapabilities();
+    if (!capabilities.length) { toast('Отметьте хотя бы одну возможность.'); return; }
+    var payload = {
+      slug: $('cmSlug').value.trim(),
+      provider: $('cmProvider').value.trim(),
+      tier: $('cmTier').value,
+      capabilities: capabilities,
+      source: $('cmSource').value.trim()
+    };
+    var context = $('cmContext').value.trim();
+    if (context !== '') payload.contextWindow = Number(context);
+    // Пустые поля отсекаются здесь только для того, чтобы не гонять
+    // заведомо негодный запрос. Настоящая проверка — на сервере, и её
+    // текст показывается как есть: он точнее любого локального.
+    if (!payload.slug || !payload.provider || !payload.source) {
+      toast('Заполните слаг, провайдера и источник данных.');
+      return;
+    }
+    btn.disabled = true;
+    api('/api/admin/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+      .then(function (r) {
+        toast('Модель подключена: ' + r.model.slug);
+        $('cmSlug').value = '';
+        $('cmContext').value = '';
+        loadCustomModels();
+        loadModelGrid();
+      })
+      .catch(function (e) { toast(e.message); })
+      .then(function () { btn.disabled = false; });
+  });
+
   function loadModelGrid() {
     var grid = $('modelsGrid');
     if (noToken(grid)) return;
@@ -4914,8 +5081,11 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
             ? ((m.capabilities || []).join(', ') || 'без объявленных возможностей')
             : (m.blockedReason || 'недоступна');
           var tag = document.createElement('i');
-          tag.className = 'tag';
-          tag.textContent = m.provider + ' · ' + m.tier +
+          // Проверенная каталогом запись и добавленная вручную не должны
+          // выглядеть одинаково: на этом различии держится всё правило
+          // реестра, заведённое после случая с несуществующим слагом.
+          tag.className = 'tag' + (m.custom ? ' hand' : '');
+          tag.textContent = (m.custom ? 'вручную · ' : '') + m.provider + ' · ' + m.tier +
             (m.contextWindow ? ' · ' + m.contextWindow : '');
           tile.appendChild(b);
           tile.appendChild(s);
@@ -4928,6 +5098,12 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
 
   onViewOpen('viewModels', loadPolicy);
   onViewOpen('viewModels', loadModelGrid);
+  // Форма подключения — только у владельца: маршрут под /api/admin/,
+  // остальным сервер откажет, и видимая форма была бы обещанием.
+  onViewOpen('viewModels', function () {
+    $('customCard').classList.toggle('hidden', myRole !== 'admin');
+    if (myRole === 'admin') loadCustomModels();
+  });
 
 
   /* ─── Администрирование ───────────────────────────────────────────── */

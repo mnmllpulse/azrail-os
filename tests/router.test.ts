@@ -255,7 +255,10 @@ describe("Регрессия: третий аудит", () => {
     // отодвинуло цикл дальше от начала функции — сам цикл не менялся.
     const router = src("src/lib/model-router.ts");
     const runStart = router.indexOf("export async function runModel");
-    const block = router.slice(runStart, runStart + 3000);
+    // Окно 4200: подключение моделей вручную (findAnyModel + пояснение,
+    // почему закреплённая модель ищется по расширенному реестру)
+    // отодвинуло цикл ещё дальше. Сам цикл не менялся.
+    const block = router.slice(runStart, runStart + 4200);
     expect(block).toContain("for (const m of preliminary.candidates)");
     expect(block, "обход всего реестра вернулся").not.toContain("for (const m of MODEL_REGISTRY)");
   });
@@ -329,7 +332,11 @@ describe("Новое: закрепление модели пользовател
     const runStart = router.indexOf("export async function runModel");
     const beforeRoute = router.slice(runStart, router.indexOf("const preliminary = route("));
     expect(beforeRoute).toContain("if (req.preferredModel)");
-    expect(beforeRoute).toContain("findModel(req.preferredModel)");
+    // findAnyModel, а не findModel: закрепить можно и модель,
+    // подключённую вручную. Поиск только по зашитому реестру означал бы
+    // «модель добавлена, но выбрать её нельзя» — ровно та поломка,
+    // из-за которой заведено хранилище custom_models.
+    expect(beforeRoute).toContain("findAnyModel(env, req.preferredModel)");
   });
 
   it("модель не найдена в реестре — явная ошибка, не тихий откат на автовыбор", () => {

@@ -42,7 +42,7 @@ if (!tables.has('missions')) {
   const columns = new Set(query("PRAGMA table_info('missions')").map(r => r.name));
   if (!columns.has('result_json')) sql.push('ALTER TABLE missions ADD COLUMN result_json TEXT;');
   sql.push('CREATE INDEX IF NOT EXISTS idx_missions_status_updated ON missions(status, updated_at);');
-  for (const file of ['003-bench.sql', '004-security-hardening.sql', '005-platform.sql', '006-model-policy.sql', '007-mission-hints.sql']) {
+  for (const file of ['003-bench.sql', '004-security-hardening.sql', '005-platform.sql', '006-model-policy.sql', '007-mission-hints.sql', '008-custom-models.sql']) {
     sql.push(readFileSync(resolve(root, 'migrations', file), 'utf8'));
   }
 }
@@ -62,7 +62,7 @@ if (!apply) {
   console.log(`D1 backup: ${backup}`);
   console.log(run('d1', 'execute', 'AZRAIL_D1', location, '--file', plan, '--yes'));
   const required = ['access_accounts','resource_owners','operation_locks','mission_outbox',
-    'mission_checkpoints','model_calls','backup_manifests','workspace_heads','request_quotas','bench_runs','model_routing_settings','mission_hints'];
+    'mission_checkpoints','model_calls','backup_manifests','workspace_heads','request_quotas','bench_runs','model_routing_settings','mission_hints','custom_models'];
   const after = new Set(query("SELECT name FROM sqlite_master WHERE type='table'").map(r => r.name));
   if (required.some(name => !after.has(name))) throw Error('Migration incomplete. Keep Worker on the previous version.');
   console.log('Schema verified. Worker deployment has not been run.');

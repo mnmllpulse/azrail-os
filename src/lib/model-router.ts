@@ -18,7 +18,6 @@ import { eligibleRegistry, policyModelCall, ModelPolicyError } from "./model-pol
 import { extractUsage, type ModelUsage, type UsageLedger } from "./usage";
 import {
   MODEL_REGISTRY,
-  findModel,
   policyFor,
   tiersFor,
   type Complexity,
@@ -27,6 +26,7 @@ import {
   type RoutePolicy,
 } from "./model-registry";
 import { clearExhausted, cooldownRemaining, isQuotaError, markExhausted } from "./model-health";
+import { findAnyModel } from "./custom-models";
 import { log, withRetry } from "./resilience";
 import type { Env } from "../types";
 
@@ -258,10 +258,21 @@ export async function runModel<T = unknown>(
   // ещё один кандидат в списке: если пользователь закрепил модель, тир и
   // reasoning ниже просто не должны участвовать в решении.
   if (req.preferredModel) {
-    const pinned = findModel(req.preferredModel);
+    // findAnyModel, а не findModel: закрепить можно и модель, подключённую
+    // вручную. Раньше здесь стоял поиск только по зашитому массиву, и
+    // любая модель вне его была недоступна в принципе — даже та, что
+    // работает в аккаунте прямо сейчас. Каталог у провайдера пополняется
+    // еженедельно, реестр правится релизами; разрыв между ними и закрывает
+    // ручное подключение.
+    //
+    // Поиск асинхронный, потому что ручные записи лежат в D1. Цена —
+    // одно чтение на закреплённый вызов, и только когда модель ЯВНО
+    // выбрана: автоматический путь ниже берёт список одним запросом.
+    const pinned = await findAnyModel(env, req.preferredModel);
     if (!pinned) {
       throw new Error(
-        `Модель "${req.preferredModel}" не найдена в реестре. Проверь слаг — маршрутизатор не подставляет другую модель молча, когда выбор сделан явно.`,
+        `Модель "${req.preferredModel}" не найдена ни в проверенном реестре, ни среди подключённых вручную. ` +
+          `Проверь слаг или добавь модель в разделе «Модели и маршрут» — маршрутизатор не подставляет другую модель молча, когда выбор сделан явно.`,
       );
     }
     if (pinned.requiresGateway && !env.AI_GATEWAY_ID) {

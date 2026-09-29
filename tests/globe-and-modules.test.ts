@@ -266,3 +266,102 @@ describe("Разрешения проекта", () => {
     expect(setter, "после записи состояние не перечитывается").toContain("loadPermissions()");
   });
 });
+
+/**
+ * ТРЕТЬЯ ИСТОРИЯ — подключение любой модели вручную.
+ *
+ * Поломка была не в одном месте, а в трёх подряд, и починка любого
+ * одного выглядела бы как работающая: (1) закреплённая модель искалась
+ * только в зашитом реестре, (2) автоматический отбор шёл по тому же
+ * зашитому списку, (3) выпадающее меню строилось из него же. Модель,
+ * живая в аккаунте, но появившаяся после последнего выпуска AZRAIL,
+ * была недоступна вообще никак. Проверки ниже держат все три звена
+ * сразу — и отдельно держат границу, которую подключение НЕ сдвигает:
+ * добавить модель значит получить право её выбрать, а не право тратить.
+ */
+describe("Новое: подключение любой модели вручную", () => {
+  const custom = readFileSync("src/lib/custom-models.ts", "utf8");
+  const router = readFileSync("src/lib/model-router.ts", "utf8");
+  const policy = readFileSync("src/lib/model-policy.ts", "utf8");
+  const idx = readFileSync("src/index.ts", "utf8");
+
+  it("расширенный реестр — это зашитый плюс ручной, а не вместо", () => {
+    // Подмена реестра ручным списком стоила бы работоспособности всем,
+    // кто ничего не подключал.
+    const fn = custom.slice(custom.indexOf("export async function effectiveRegistry"));
+    expect(fn).toContain("...MODEL_REGISTRY");
+    expect(fn, "проверенная запись должна побеждать одноимённую ручную").toContain("findModel(");
+  });
+
+  it("необходимость Gateway вычисляется из слага, а не приходит из формы", () => {
+    // Модель не из @cf/ идёт через сторонний шлюз всегда. Флаг от
+    // пользователя означал бы «отключить проверку галочкой».
+    expect(custom).toContain('!slug.startsWith("@cf/")');
+    const add = custom.slice(custom.indexOf("export async function addCustomModel"));
+    expect(add, "признак Gateway не должен читаться из входных данных")
+      .not.toMatch(/input\.requiresGateway/);
+  });
+
+  it("непроведённая миграция выглядит как пустой список, а не как отказ", () => {
+    // Иначе рабочий маршрутизатор на старой базе читался бы как мёртвый.
+    const list = custom.slice(custom.indexOf("export async function listCustomModels"));
+    expect(list).toContain("catch");
+    expect(list).toContain("return []");
+  });
+
+  it("источник данных обязателен — то же правило, что в проверенном реестре", () => {
+    // Через полгода это единственное, по чему видно, что перепроверять.
+    expect(custom).toMatch(/source[\s\S]{0,400}CustomModelError/);
+  });
+
+  it("закрепление и автоотбор читают один и тот же расширенный реестр", () => {
+    expect(router).toContain("findAnyModel(env, req.preferredModel)");
+    expect(policy).toContain("await effectiveRegistry(env)");
+    expect(policy, "зашитый реестр напрямую в отборе — возврат поломки")
+      .not.toContain("MODEL_REGISTRY.filter");
+  });
+
+  it("подключение даёт право выбрать, но не право потратить", () => {
+    // Ворота оплаты (сторонние модели, Gateway, свежий тариф, бюджет)
+    // остаются в policyModelCall и о ручных моделях не знают.
+    const call = policy.slice(policy.indexOf("export async function policyModelCall"));
+    expect(call).toContain("allowThirdParty");
+    expect(call, "ручное подключение не должно обходить проверку тарифа")
+      .not.toContain("custom");
+  });
+
+  it("управление моделями — только под админским шлюзом", () => {
+    expect(idx).toContain('url.pathname === "/api/admin/models"');
+    const gate = readFileSync("src/lib/accounts.ts", "utf8");
+    expect(gate).toMatch(/\/api\/admin\//);
+  });
+
+  it("выпадающее меню строится из расширенного реестра и помечает ручные", () => {
+    expect(idx).toContain("(await effectiveRegistry(env)).map");
+    expect(idx).toContain("custom: !findModel(m.slug)");
+    const js = script();
+    expect(js, "ручная модель не должна выглядеть как проверенная").toContain("m.custom ? 'вручную · '");
+  });
+
+  it("форма подключения не подставляет текст с сервера через innerHTML", () => {
+    const js = script();
+    const block = js.slice(js.indexOf("function loadCustomModels"), js.indexOf("$('cmAdd').addEventListener"));
+    expect(block).not.toContain("innerHTML");
+    expect(block, "список должен строиться теми же помощниками, что остальные модули").toContain("modItem(");
+  });
+
+  it("форма скрыта у наблюдателя, а не показана и отклонена сервером", () => {
+    const js = script();
+    expect(js).toMatch(/customCard'\)\.classList\.toggle\('hidden', myRole !== 'admin'\)/);
+  });
+
+  it("таблица есть и в миграции, и в схеме свежей установки", () => {
+    // schema.sql миграции не проигрывает: пропуск здесь означал бы
+    // таблицу, которой на новой базе не будет никогда.
+    expect(readFileSync("migrations/008-custom-models.sql", "utf8")).toContain("CREATE TABLE IF NOT EXISTS custom_models");
+    expect(readFileSync("schema.sql", "utf8")).toContain("CREATE TABLE IF NOT EXISTS custom_models");
+    const mig = readFileSync("scripts/migrate.mjs", "utf8");
+    expect(mig).toContain("008-custom-models.sql");
+    expect(mig, "таблица должна попасть в проверку после миграции").toContain("'custom_models'");
+  });
+});

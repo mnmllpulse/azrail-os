@@ -366,6 +366,23 @@ CREATE TABLE IF NOT EXISTS model_routing_settings (
   revision INTEGER NOT NULL DEFAULT 0
 );
 
+-- 0.8.2: models connected by hand. Mirrors migrations/008-custom-models.sql —
+-- that file explains WHY these rows live apart from src/lib/model-registry.ts.
+-- Kept in sync on purpose: schema.sql is the fresh-install path and never
+-- replays migrations, so a table missing here would be missing forever on a
+-- new database while existing ones get it from the migration.
+CREATE TABLE IF NOT EXISTS custom_models (
+  slug TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  tier TEXT NOT NULL CHECK (tier IN ('frontier','balanced','fast')),
+  capabilities TEXT NOT NULL,
+  context_window INTEGER CHECK (context_window IS NULL OR context_window > 0),
+  requires_gateway INTEGER NOT NULL CHECK (requires_gateway IN (0,1)),
+  source TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  created_by TEXT NOT NULL
+);
+
 -- 0.8.1: atomic in-flight hints, safe to reapply.
 CREATE TABLE IF NOT EXISTS mission_hints (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
