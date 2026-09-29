@@ -61,7 +61,7 @@ describe("Pulse Shell security invariants", () => {
   });
 
   it("глобус изолирован отдельным документом и не блокирует composer", () => {
-    expect(shell).toContain('src="/pulse-globe.html"');
+    expect(shell).toContain('data-src="/pulse-globe.html"');
     expect(shell).toContain('id="composer"');
     expect(shell).toContain('src="/pulse.js"');
   });
@@ -214,5 +214,158 @@ describe("Consolidation regressions", () => {
   it("считает write budget после разрешения AUTO → Studio → Mode", () => {
     expect(api).toContain("estimateMissionWrites(maxIterations)");
     expect(api.indexOf("const studioRoute = routeStudio")).toBeLessThan(api.indexOf("const budget = await chargeWrites"));
+  });
+});
+
+
+describe("System observability drawer", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+  const api = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+
+  it("показывает только реальные runtime данные", () => {
+    expect(shell).toContain('id="systemPanel"');
+    expect(shell).toContain('id="systemOpen"');
+    expect(shell).not.toContain("SYSTEM ONLINE");
+    expect(client).toContain("/api/azrail/metrics?projectId=");
+    expect(client).toContain("/api/azrail/routing-settings");
+  });
+
+  it("защищает Project Workspace и metrics ownership проверкой", () => {
+    expect(api).toContain('await requireResource(env, principal, "project", projectId);');
+    expect(api).toContain('await requireResource(env,principal,"project",project);');
+  });
+
+  it("не содержит хвостового дублированного runtime", () => {
+    expect(client.split("})();").length - 1).toBe(1);
+    expect(client.split("$('systemOpen').addEventListener").length - 1).toBe(1);
+    expect(client.split("$('projectsOpen').addEventListener").length - 1).toBe(1);
+  });
+});
+
+
+describe("Standalone System view", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const system = fs.readFileSync(path.join(root, "public/system.js"), "utf8");
+
+  it("имеет одну системную точку входа без мёртвого drawer JS", () => {
+    expect(shell.split('href="/system.html"').length - 1).toBe(1);
+    expect(shell).not.toContain('id="systemOpen"');
+    expect(shell).not.toContain(".catalog-body");
+    expect(shell).not.toContain("\\n");
+  });
+
+  it("читает только реальные runtime API", () => {
+    expect(system).toContain("/api/azrail/me");
+    expect(system).toContain("/api/azrail/routing-settings");
+    expect(system).toContain("/api/azrail/metrics");
+    expect(system).not.toMatch(/innerHTML\s*=/);
+  });
+});
+
+
+describe("Measured System observability", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const pulse = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+  const system = fs.readFileSync(path.join(root, "public/system.js"), "utf8");
+
+  it("сохраняет только выданный сервером write budget", () => {
+    expect(pulse).toContain("if(d.budget)cached('azrail_pulse_write_budget',JSON.stringify(d.budget))");
+    expect(system).toContain("azrail_pulse_write_budget");
+  });
+
+  it("показывает фактические metering и routing policy поля", () => {
+    expect(system).toContain("monthlyBudgetUsd");
+    expect(system).toContain("committedUsd");
+    expect(system).toContain("unknown_cost_calls");
+    expect(system).toContain("measured_micro_usd");
+    expect(system).toContain("mean_ms");
+    expect(system).toContain("gatewayConfigured");
+    expect(system).toContain("workersPlan");
+  });
+
+  it("не содержит декоративных числовых метрик", () => {
+    expect(system).not.toMatch(/Math\.random\(\).*metric/i);
+    expect(system).not.toMatch(/fake|demo metric|placeholder metric/i);
+    expect(system).not.toMatch(/innerHTML\s*=/);
+  });
+});
+
+
+describe("Canonical Pulse entrypoint", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const index = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+  const wrangler = fs.readFileSync(path.join(root, "wrangler.toml"), "utf8");
+
+  it("отдаёт Pulse на корне и HTML fallback", () => {
+    expect(index).toContain('incomingUrl.pathname === "/"');
+    expect(index).toContain('new URL("/pulse.html", incomingUrl)');
+    expect(index).toContain('new URL("/pulse.html", url)');
+  });
+
+  it("запускает Worker первым только для root и API", () => {
+    expect(wrangler).toContain('run_worker_first = [ "/", "/api/*" ]');
+  });
+
+  it("сохраняет legacy и advanced assets", () => {
+    expect(fs.existsSync(path.join(root, "public/index.html"))).toBe(true);
+    expect(fs.existsSync(path.join(root, "public/ultimate.html"))).toBe(true);
+    expect(fs.existsSync(path.join(root, "public/pulse.html"))).toBe(true);
+  });
+});
+
+
+describe("Staging isolation", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const production = fs.readFileSync(path.join(root, "wrangler.toml"), "utf8");
+  const staging = fs.readFileSync(path.join(root, "wrangler.staging.toml"), "utf8");
+  const guard = fs.readFileSync(path.join(root, "scripts/check-staging.mjs"), "utf8");
+  const capture = (text: string, re: RegExp) => re.exec(text)?.[1];
+
+  it("использует отдельные имена хранилищ и force-free", () => {
+    expect(staging).toContain('database_name = "azrail-db-staging"');
+    expect(staging).toContain('bucket_name = "azrail-artifacts-staging"');
+    expect(staging).toContain('AZRAIL_FORCE_FREE = "true"');
+    expect(staging).toContain('AZRAIL_WRITE_BUDGET = "1000"');
+  });
+
+  it("не содержит production resource identifiers", () => {
+    const prodD1 = capture(production,/database_id\\s*=\\s*"([^"]+)"/);
+    const prodKv = capture(production,/\\[\\[kv_namespaces\\]\\][\\s\\S]*?\\nid\\s*=\\s*"([^"]+)"/);
+    expect(prodD1).toBeTruthy(); expect(prodKv).toBeTruthy();
+    expect(staging).not.toContain(String(prodD1));
+    expect(staging).not.toContain(String(prodKv));
+  });
+
+  it("не включает production Sandbox и guard проверяет placeholders", () => {
+    expect(staging).not.toContain("[[containers]]");
+    expect(staging).not.toContain("AZRAIL_SANDBOX");
+    expect(guard).toContain("REPLACE_[A-Z0-9_]+");
+    expect(guard).toContain("Staging D1 must not equal production D1");
+    expect(guard).toContain("Staging R2 must not equal production R2");
+  });
+});
+
+
+describe("Presence ownership and deferred Globe", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const index = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+
+  it("не связывает heartbeat с чужим Project", () => {
+    const start = index.indexOf('url.pathname === "/api/presence" && request.method === "POST"');
+    const block = index.slice(start, start + 900);
+    expect(block).toContain('requireResource(env, principal, "project", presenceProject)');
+    expect(block.indexOf("requireResource")).toBeLessThan(block.indexOf("heartbeatPresence"));
+  });
+
+  it("грузит Globe после первичного UI paint", () => {
+    expect(shell).toContain('data-src="/pulse-globe.html"');
+    expect(shell).not.toContain('id="pulseGlobe" src="/pulse-globe.html"');
+    expect(client).toContain("function loadGlobe()");
+    expect(client).toContain("requestIdleCallback");
   });
 });

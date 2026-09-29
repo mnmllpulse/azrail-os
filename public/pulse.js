@@ -13,6 +13,14 @@ let mode=cached('azrail_pulse_mode')||'auto';
 let knownProjects=[];
 let studioCatalogData=null;
 let studioHint='';
+function loadGlobe(){
+  const frame=$('pulseGlobe');
+  if(!frame||frame.src)return;
+  const src=frame.dataset.src;
+  if(src)frame.src=src;
+}
+if('requestIdleCallback' in window)window.requestIdleCallback(loadGlobe,{timeout:700});
+else setTimeout(loadGlobe,120);
 const labels={accepted:'Принято',queued:'В очереди',planning:'Планирование',executing:'Выполнение',verifying:'Проверка',checking:'Проверка',repairing:'Исправление',waiting_approval:'Нужно решение',completed:'Готово',done:'Готово',failed:'Ошибка',cancelled:'Остановлено'};
 function notice(t){$('notice').textContent=t||'';}
 function headers(json,key){const h={Authorization:'Bearer '+token};if(json)h['Content-Type']='application/json';if(key)h['Idempotency-Key']=key;return h;}
@@ -150,7 +158,58 @@ async function openProjects(){
   }catch(e){notice(e.message);}
 }
 function closeProjects(){$('projectsPanel').hidden=true;}
+function fmtInt(value){
+  const n=Number(value);
+  return Number.isFinite(n)?new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(n):'—';
+}
+function fmtUsd(value){
+  const n=Number(value);
+  return Number.isFinite(n) ? "$" + n.toFixed(2) : "—";
+}
+async function openSystem(){
+  if(!token){openAccess("Сначала подключите AZRAIL.");return;}
+  $("systemPanel").hidden=false;
+  $("systemNote").textContent="Загружаю реальные данные runtime…";
+  try{
+    const routing=await api("/api/azrail/routing-settings");
+    const policy=routing.policy||{};
+    $("systemWorkersPlan").textContent=String(routing.workersPlan||"unknown").toUpperCase();
+    $("systemGateway").textContent=routing.gatewayConfigured?"CONFIGURED":"OFF";
+    $("systemThirdParty").textContent=policy.allowThirdPartyModels?"ENABLED":"OFF";
+    $("systemForceFree").textContent=policy.forceFree?"ON":"OFF";
+    $("systemBudget").textContent=fmtUsd(policy.monthlyBudgetUsd);
+    $("systemSpend").textContent=fmtUsd(routing.committedUsd);
+    $("systemNote").textContent=routing.note||"Runtime settings загружены.";
 
+    if(!project) await ensureProjectList();
+    if(!project){
+      $("systemMissions").textContent="0";
+      $("systemCalls").textContent="0";
+      $("systemInputTokens").textContent="0";
+      $("systemOutputTokens").textContent="0";
+      $("systemMetering").textContent="—";
+      $("systemLatency").textContent="—";
+      $("systemUnknownCost").textContent="0";
+      return;
+    }
+
+    const metrics=await api("/api/azrail/metrics?projectId="+encodeURIComponent(project));
+    const missionRows=Array.isArray(metrics.missions)?metrics.missions:[];
+    const missionTotal=missionRows.reduce((sum,row)=>sum+(Number(row.count)||0),0);
+    const models=metrics.models||{};
+    $("systemMissions").textContent=fmtInt(missionTotal);
+    $("systemCalls").textContent=fmtInt(models.calls||0);
+    $("systemInputTokens").textContent=fmtInt(models.input_tokens||0);
+    $("systemOutputTokens").textContent=fmtInt(models.output_tokens||0);
+    $("systemMetering").textContent=String(metrics.metering||"off").toUpperCase();
+    $("systemLatency").textContent=Number.isFinite(Number(models.mean_ms))?fmtInt(models.mean_ms)+" ms":"—";
+    $("systemUnknownCost").textContent=fmtInt(models.unknown_cost_calls||0);
+  }catch(e){
+    $("systemNote").textContent=e.message;
+    if(e.status===401){$("systemPanel").hidden=true;openAccess(e.message);}
+  }
+}
+function closeSystem(){$("systemPanel").hidden=true;}
 
 async function loadStudioCatalog(){
   if(studioCatalogData)return studioCatalogData;
@@ -220,7 +279,7 @@ $('composer').addEventListener('submit',async e=>{
   if(!token){openAccess('Сначала подключите AZRAIL.');return;}
   setBusy(true);notice('Создаю проект и передаю задачу AZRAIL…');
   try{const projectId=await ensureProject(message);const key=uuid();const d=await api('/api/azrail/mission',{method:'POST',key,body:{message,projectId,preferredMode:mode,preferredStudio:studioHint||undefined}});
-    mission=d.missionId;cached('azrail_pulse_mission',mission);studioHint='';$('mission').hidden=false;$('missionTitle').textContent=message;$('missionState').textContent='ACCEPTED';
+    mission=d.missionId;cached('azrail_pulse_mission',mission);if(d.budget)cached('azrail_pulse_write_budget',JSON.stringify(d.budget));studioHint='';$('mission').hidden=false;$('missionTitle').textContent=message;$('missionState').textContent='ACCEPTED';
     const routed=d.studio?.studio&&d.studio.studio!=='auto'?' · '+d.studio.studio.toUpperCase():'';
     notice('Задача принята'+routed+'. AZRAIL продолжит работу независимо от открытой страницы.');poll();
   }catch(e){setBusy(false);if(e.status===401)openAccess(e.message);else notice(e.message);}
@@ -234,6 +293,9 @@ $('studioCatalog').addEventListener('click',e=>{if(e.target===$('studioCatalog')
 $('projectsOpen').addEventListener('click',openProjects);
 $('projectsClose').addEventListener('click',closeProjects);
 $('projectsPanel').addEventListener('click',e=>{if(e.target===$('projectsPanel'))closeProjects();});
+$('systemOpen').addEventListener('click',openSystem);
+$('systemClose').addEventListener('click',closeSystem);
+$('systemPanel').addEventListener('click',e=>{if(e.target===$('systemPanel'))closeSystem();});
 $('accessConnect').addEventListener('click',connect);
 $('accessClose').addEventListener('click',closeAccess);
 $('accessKey').addEventListener('keydown',e=>{if(e.key==='Enter')connect();});

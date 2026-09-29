@@ -20,6 +20,7 @@ compatibility_flags = ["nodejs_compat"]
 [assets]
 directory = "./public"
 binding = "ASSETS"
+run_worker_first = [ "/", "/api/*" ]
 # Проверено: `wrangler versions upload --dry-run` собрал конфиг и корректно
 # показал env.ASSETS среди биндингов — синтаксис живой, не на глаз.
 #
