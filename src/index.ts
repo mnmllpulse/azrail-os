@@ -454,6 +454,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       } catch {
         return json({ error: "Некорректный projectId." }, env, 400);
       }
+      await requireResource(env, principal, "project", projectId);
       const snapshot = await loadProjectWorkspace(env, projectId);
       const orchestrator = await getAgentByName(env.Orchestrator, projectId);
       const history = await orchestrator.getHistory(projectId, 20);
@@ -508,6 +509,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     if(url.pathname === "/api/metrics" && request.method === "GET") {
       const project=url.searchParams.get("projectId");
       if(!project)return json({error:"projectId обязателен."},env,400);
+      await requireResource(env,principal,"project",project);
       const missions=await env.AZRAIL_D1.prepare("SELECT status,COUNT(*) AS count FROM missions WHERE project_id=? GROUP BY status").bind(project).all();
       const calls=await env.AZRAIL_D1.prepare("SELECT COUNT(*) AS calls,SUM(prompt_tokens) AS input_tokens,SUM(completion_tokens) AS output_tokens,SUM(actual_micro_usd) AS measured_micro_usd,SUM(CASE WHEN actual_micro_usd IS NULL THEN 1 ELSE 0 END) AS unknown_cost_calls,AVG(finished_at-started_at) AS mean_ms FROM model_calls WHERE scope=? OR scope IN (SELECT 'mission:'||id FROM missions WHERE project_id=?)").bind(`project:${project}`,project).first();
       return json({missions:missions.results,models:calls,metering:env.AZRAIL_METERING??"off"},env);
