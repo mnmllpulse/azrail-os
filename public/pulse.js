@@ -10,6 +10,7 @@ let timer=null,busy=false,presenceTimer=null,globeReady=false;
 const presenceSession=cached('azrail_pulse_presence')||('s_'+uuid().replaceAll('-',''));
 cached('azrail_pulse_presence',presenceSession);
 let mode=cached('azrail_pulse_mode')||'auto';
+let knownProjects=[];
 const labels={accepted:'Принято',queued:'В очереди',planning:'Планирование',executing:'Выполнение',verifying:'Проверка',checking:'Проверка',repairing:'Исправление',waiting_approval:'Нужно решение',completed:'Готово',done:'Готово',failed:'Ошибка',cancelled:'Остановлено'};
 function notice(t){$('notice').textContent=t||'';}
 function headers(json,key){const h={Authorization:'Bearer '+token};if(json)h['Content-Type']='application/json';if(key)h['Idempotency-Key']=key;return h;}
@@ -62,9 +63,17 @@ async function connect(){
   catch(e){token=previous;$('accessNotice').textContent=e.message;}
 }
 async function ensureProjectList(){
-  if(project)return project;
   const d=await api('/api/azrail/projects');
-  if(Array.isArray(d.projects)&&d.projects.length){project=d.projects[0].id;cached('azrail_pulse_project',project);return project;}
+  knownProjects=Array.isArray(d.projects)?d.projects:[];
+  const existing=knownProjects.find(p=>p.id===project);
+  if(existing)return existing.id;
+  if(knownProjects.length){
+    project=knownProjects[0].id;
+    cached('azrail_pulse_project',project);
+    return project;
+  }
+  project='';
+  cached('azrail_pulse_project','');
   return '';
 }
 function projectNameFrom(message){const clean=message.replace(/\s+/g,' ').trim();return clean.length>54?clean.slice(0,54)+'…':clean||'Новый проект';}
@@ -73,6 +82,72 @@ async function ensureProject(message){
   const d=await api('/api/azrail/projects',{method:'POST',body:{name:projectNameFrom(message)}});
   project=d.project.id;cached('azrail_pulse_project',project);heartbeatPresence();return project;
 }
+function workspaceRow(title,meta){
+  const row=document.createElement('div');row.className='workspace-row';
+  const b=document.createElement('b');b.textContent=title||'—';row.append(b);
+  if(meta){const s=document.createElement('span');s.textContent=meta;row.append(s);}
+  return row;
+}
+function workspaceEmpty(text){
+  const el=document.createElement('div');el.className='workspace-empty';el.textContent=text;return el;
+}
+function renderWorkspaceList(id,items,map,limit=12){
+  const root=$(id);root.replaceChildren();
+  const list=Array.isArray(items)?items.slice(0,limit):[];
+  if(!list.length){root.append(workspaceEmpty('Нет данных'));return;}
+  for(const item of list){const [title,meta]=map(item);root.append(workspaceRow(title,meta));}
+  if(items.length>limit)root.append(workspaceEmpty('Ещё '+(items.length-limit)+'…'));
+}
+async function loadProjectWorkspace(projectId,meta){
+  $('projectTitle').textContent=meta?.name||projectId;
+  $('projectDescription').textContent=meta?.description||('Project ID: '+projectId);
+  const d=await api('/api/azrail/projects/'+encodeURIComponent(projectId)+'/workspace');
+  const files=d.files?.files||[];
+  const memory=Array.isArray(d.memory)?d.memory:[];
+  const versions=Array.isArray(d.versions)?d.versions:[];
+  const history=Array.isArray(d.history)?d.history:[];
+  $('filesCount').textContent=String(files.length)+(d.files?.truncated?'+':'');
+  $('memoryCount').textContent=String(memory.length);
+  $('versionsCount').textContent=String(versions.length);
+  $('historyCount').textContent=String(history.length);
+  renderWorkspaceList('projectFiles',files,f=>[f.path,(typeof f.size==='number'?f.size+' B':'')]);
+  renderWorkspaceList('projectMemory',memory,m=>['['+(m.category||'memory')+'] '+(m.key||'fact'),m.value||'']);
+  renderWorkspaceList('projectVersions',versions,v=>['v'+(v.versionNumber??'?')+(v.summary?' · '+v.summary:''),v.createdByAgent||v.createdAt||'']);
+  renderWorkspaceList('projectHistory',history,x=>[(x.intent||x.agent||'task')+' · '+(x.status||''),x.output_summary||x.error||x.started_at||'']);
+}
+function renderProjectButtons(){
+  const root=$('projectList');root.replaceChildren();
+  if(!knownProjects.length){root.append(workspaceEmpty('Проектов пока нет. Первый создастся из Composer.'));return;}
+  for(const p of knownProjects){
+    const button=document.createElement('button');button.type='button';button.className='project-item'+(p.id===project?' active':'');
+    const name=document.createElement('b');name.textContent=p.name||p.id;
+    const meta=document.createElement('span');meta.textContent=(p.status||'active')+' · '+(p.updatedAt||'');
+    button.append(name,meta);
+    button.addEventListener('click',async()=>{
+      if(busy&&p.id!==project){notice('Сначала дождитесь завершения текущей миссии перед сменой активного проекта.');return;}
+      if(p.id!==project){
+        project=p.id;cached('azrail_pulse_project',project);
+        mission='';cached('azrail_pulse_mission','');$('mission').hidden=true;setProgress('');
+        heartbeatPresence();
+      }
+      renderProjectButtons();
+      try{await loadProjectWorkspace(p.id,p);}catch(e){notice(e.message);}
+    });
+    root.append(button);
+  }
+}
+async function openProjects(){
+  if(!token){openAccess('Сначала подключите AZRAIL.');return;}
+  try{
+    await ensureProjectList();
+    renderProjectButtons();
+    $('projectsPanel').hidden=false;
+    const current=knownProjects.find(p=>p.id===project)||knownProjects[0];
+    if(current)await loadProjectWorkspace(current.id,current);
+  }catch(e){notice(e.message);}
+}
+function closeProjects(){$('projectsPanel').hidden=true;}
+
 function renderMission(d){
   $('mission').hidden=false;const m=d.mission||{};
   $('missionTitle').textContent=m.goal||m.title||'AZRAIL mission';
@@ -100,6 +175,9 @@ $('composer').addEventListener('submit',async e=>{
 });
 for(const b of document.querySelectorAll('[data-mode]'))b.addEventListener('click',()=>setMode(b.dataset.mode));
 setMode(mode);
+$('projectsOpen').addEventListener('click',openProjects);
+$('projectsClose').addEventListener('click',closeProjects);
+$('projectsPanel').addEventListener('click',e=>{if(e.target===$('projectsPanel'))closeProjects();});
 $('accessConnect').addEventListener('click',connect);
 $('accessClose').addEventListener('click',closeAccess);
 $('accessKey').addEventListener('keydown',e=>{if(e.key==='Enter')connect();});
