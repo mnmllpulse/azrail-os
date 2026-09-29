@@ -31,6 +31,24 @@ export type MissionIntent =
 
 export type AgentRunStatus = "queued" | "running" | "completed" | "failed" | "skipped";
 
+export type RoutingMode = "auto" | "fast" | "balanced" | "deep" | "creative" | "code";
+
+export type MissionStudio =
+  | "development"
+  | "creative"
+  | "audio"
+  | "intelligence"
+  | "agents"
+  | "operations"
+  | "pulse-lab"
+  | "auto";
+
+export interface StudioRouteInfo {
+  studio: MissionStudio;
+  source: "explicit" | "heuristic" | "fallback";
+  reason: string;
+}
+
 export interface MissionArtifact {
   id: string;
   kind: "file" | "report" | "image" | "audio" | "video" | "deployment" | "other";
@@ -67,6 +85,8 @@ export interface Mission {
   conversationId?: string;
   status: MissionStatus;
   intent: MissionIntent;
+  studio?: MissionStudio;
+  routingMode?: RoutingMode;
   title?: string;
   request: string;
   agents: MissionAgentRun[];
@@ -86,13 +106,19 @@ export interface CreateMissionRequest {
   conversationId?: string;
   message: string;
   attachmentIds?: string[];
-  preferredMode?: "auto" | "fast" | "balanced" | "deep" | "creative" | "code";
+  preferredMode?: RoutingMode;
+  preferredStudio?: MissionStudio;
   preferredModel?: string;
   maxIterations?: number;
 }
 
 export interface CreateMissionResponse {
-  mission: Mission;
+  success: true;
+  missionId: string;
+  status: "accepted";
+  studio?: StudioRouteInfo;
+  routingMode?: RoutingMode;
+  budget?: { used: number; limit: number; remaining: number };
   deduplicated?: boolean;
 }
 
@@ -107,6 +133,7 @@ export interface MissionEvent {
     | "tool_finished"
     | "artifact"
     | "verification"
+    | "studio_routed"
     | "message"
     | "error";
   createdAt: string;
