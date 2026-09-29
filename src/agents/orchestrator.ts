@@ -513,6 +513,8 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     projectId: string;
     goal: string;
     maxIterations: number;
+    preferredMode?: RoutingMode;
+    preferredStudio?: StudioId;
   }): Promise<TaskResult> {
     const stopHeartbeat = await this.keepAlive();
     try {
