@@ -10,6 +10,7 @@ let timer=null,busy=false,presenceTimer=null,globeReady=false;
 const presenceSession=cached('azrail_pulse_presence')||('s_'+uuid().replaceAll('-',''));
 cached('azrail_pulse_presence',presenceSession);
 let mode=cached('azrail_pulse_mode')||'auto';
+let projectsCache=[];
 let knownProjects=[];
 const labels={accepted:'Принято',queued:'В очереди',planning:'Планирование',executing:'Выполнение',verifying:'Проверка',checking:'Проверка',repairing:'Исправление',waiting_approval:'Нужно решение',completed:'Готово',done:'Готово',failed:'Ошибка',cancelled:'Остановлено'};
 function notice(t){$('notice').textContent=t||'';}
@@ -82,6 +83,66 @@ async function ensureProject(message){
   const d=await api('/api/azrail/projects',{method:'POST',body:{name:projectNameFrom(message)}});
   project=d.project.id;cached('azrail_pulse_project',project);heartbeatPresence();return project;
 }
+
+function clearNode(node){while(node.firstChild)node.removeChild(node.firstChild);}
+function projectRow(title,detail){
+  const row=document.createElement('div');row.className='workspace-row';
+  const b=document.createElement('b');b.textContent=title||'—';row.appendChild(b);
+  if(detail){const span=document.createElement('span');span.textContent=detail;row.appendChild(span);}
+  return row;
+}
+function renderCollection(id,items,mapper){
+  const root=$(id);clearNode(root);
+  if(!Array.isArray(items)||!items.length){const empty=document.createElement('div');empty.className='workspace-empty';empty.textContent='Пока пусто.';root.appendChild(empty);return;}
+  for(const item of items.slice(0,30)){const [title,detail]=mapper(item);root.appendChild(projectRow(title,detail));}
+}
+function renderProjectList(){
+  const root=$('projectList');clearNode(root);
+  if(!projectsCache.length){const empty=document.createElement('div');empty.className='workspace-empty';empty.textContent='Проектов пока нет.';root.appendChild(empty);return;}
+  for(const item of projectsCache){
+    const button=document.createElement('button');button.type='button';button.className='project-item'+(item.id===project?' active':'');
+    const b=document.createElement('b');b.textContent=item.name||item.id;button.appendChild(b);
+    const meta=document.createElement('span');meta.textContent=(item.status||'active')+' · '+(item.updatedAt||'');button.appendChild(meta);
+    button.addEventListener('click',()=>selectProject(item.id));
+    root.appendChild(button);
+  }
+}
+async function loadWorkspace(projectId){
+  if(!projectId)return;
+  $('projectTitle').textContent='Загрузка…';$('projectDescription').textContent='Читаю Project Workspace.';
+  try{
+    const d=await api('/api/azrail/projects/'+encodeURIComponent(projectId)+'/workspace');
+    const info=projectsCache.find(p=>p.id===projectId);
+    $('projectTitle').textContent=info?.name||projectId;
+    $('projectDescription').textContent=info?.description||'Единое пространство файлов, памяти, версий и истории.';
+    const files=Array.isArray(d.files?.files)?d.files.files:[];
+    const memory=Array.isArray(d.memory)?d.memory:[];
+    const versions=Array.isArray(d.versions)?d.versions:[];
+    const history=Array.isArray(d.history)?d.history:[];
+    $('filesCount').textContent=String(files.length)+(d.files?.truncated?'+':'');
+    $('memoryCount').textContent=String(memory.length);
+    $('versionsCount').textContent=String(versions.length);
+    $('historyCount').textContent=String(history.length);
+    renderCollection('projectFiles',files,x=>[x.path,typeof x.size==='number'?Math.round(x.size/1024)+' KB':'']);
+    renderCollection('projectMemory',memory,x=>[x.key,'['+(x.category||'memory')+'] '+(x.value||'')]);
+    renderCollection('projectVersions',versions,x=>['v'+(x.versionNumber??'?'),[x.summary,x.createdByAgent,x.createdAt].filter(Boolean).join(' · ')]);
+    renderCollection('projectHistory',history,x=>[x.intent||x.agent||'Task',[x.status,x.agent,x.output_summary||x.error,x.started_at].filter(Boolean).join(' · ')]);
+  }catch(e){
+    $('projectTitle').textContent='Project Workspace недоступен';
+    $('projectDescription').textContent=e.message;
+  }
+}
+async function selectProject(id){
+  project=id;cached('azrail_pulse_project',project);mission='';cached('azrail_pulse_mission','');
+  renderProjectList();heartbeatPresence();await loadWorkspace(project);
+}
+async function openProjects(){
+  if(!token){openAccess('Подключите AZRAIL, чтобы открыть проекты.');return;}
+  $('projectsPanel').hidden=false;
+  try{await ensureProjectList();renderProjectList();if(project)await loadWorkspace(project);}
+  catch(e){if(e.status===401){$('projectsPanel').hidden=true;openAccess(e.message);}else{$('projectDescription').textContent=e.message;}}
+}
+function closeProjects(){$('projectsPanel').hidden=true;}
 function workspaceRow(title,meta){
   const row=document.createElement('div');row.className='workspace-row';
   const b=document.createElement('b');b.textContent=title||'—';row.append(b);
@@ -175,6 +236,9 @@ $('composer').addEventListener('submit',async e=>{
 });
 for(const b of document.querySelectorAll('[data-mode]'))b.addEventListener('click',()=>setMode(b.dataset.mode));
 setMode(mode);
+$('projectsOpen').addEventListener('click',openProjects);
+$('projectsClose').addEventListener('click',closeProjects);
+$('projectsPanel').addEventListener('click',e=>{if(e.target===$('projectsPanel'))closeProjects();});
 $('projectsOpen').addEventListener('click',openProjects);
 $('projectsClose').addEventListener('click',closeProjects);
 $('projectsPanel').addEventListener('click',e=>{if(e.target===$('projectsPanel'))closeProjects();});
