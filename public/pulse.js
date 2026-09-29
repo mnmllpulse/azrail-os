@@ -150,6 +150,97 @@ async function openProjects(){
   }catch(e){notice(e.message);}
 }
 function closeProjects(){$('projectsPanel').hidden=true;}
+function displayNumber(value){
+  const n=Number(value);
+  return Number.isFinite(n)?new Intl.NumberFormat('ru-RU').format(n):'—';
+}
+function displayUsd(value){
+  const n=Number(value);
+  return Number.isFinite(n)?'$'+n.toFixed(n<1?4:2):'—';
+}
+function serviceText(service){
+  if(!service)return 'нет данных';
+  const latency=typeof service.ms==='number'?' · '+service.ms+' ms':'';
+  return String(service.status||'unknown').toUpperCase()+latency;
+}
+async function readHealth(){
+  const r=await fetch('/health',{headers:headers(false,'')});
+  let data={};try{data=await r.json();}catch{}
+  return {ok:r.ok,status:r.status,data};
+}
+async function openSystem(){
+  if(!token){openAccess('Сначала подключите AZRAIL.');return;}
+  $('systemPanel').hidden=false;
+  $('systemProject').textContent=project?'Project ID: '+project:'Проект не выбран.';
+  $('systemNote').textContent='Загружаю фактические runtime-данные…';
+  const [healthResult,routingResult,metricsResult]=await Promise.allSettled([
+    readHealth(),
+    api('/api/azrail/routing-settings'),
+    project?api('/api/azrail/metrics?projectId='+encodeURIComponent(project)):Promise.resolve(null),
+  ]);
+
+  if(healthResult.status==='fulfilled'){
+    const health=healthResult.value.data||{};
+    $('systemOverall').textContent=String(health.status||('HTTP '+healthResult.value.status)).toUpperCase();
+    const services=Array.isArray(health.services)?health.services:[];
+    const byName=Object.fromEntries(services.map(x=>[x.name,x]));
+    $('systemD1').textContent=serviceText(byName.d1);
+    $('systemKV').textContent=serviceText(byName.kv);
+    $('systemR2').textContent=serviceText(byName.r2);
+  }else{
+    $('systemOverall').textContent='UNAVAILABLE';
+    $('systemD1').textContent='нет данных';
+    $('systemKV').textContent='нет данных';
+    $('systemR2').textContent='нет данных';
+  }
+
+  if(routingResult.status==='fulfilled'){
+    const routing=routingResult.value||{};
+    const policy=routing.policy||{};
+    $('systemSpend').textContent=displayUsd(routing.committedUsd);
+    $('systemMonthlyBudget').textContent=displayUsd(policy.monthlyBudgetUsd);
+    $('systemGateway').textContent=(routing.gatewayConfigured?'AI Gateway ON':'AI Gateway OFF')+' · Workers '+String(routing.workersPlan||'unknown').toUpperCase();
+    $('systemPolicy').textContent=(policy.allowThirdPartyModels?'HYBRID':'FREE-ONLY')+(policy.forceFree?' · FORCE FREE':'')+' · REV '+String(policy.revision??0);
+    $('systemNote').textContent=String(routing.note||'SYSTEM показывает только фактические runtime-данные.');
+  }else{
+    $('systemGateway').textContent='нет данных';
+    $('systemPolicy').textContent='нет данных';
+    $('systemMonthlyBudget').textContent='—';
+  }
+
+  if(metricsResult.status==='fulfilled'&&metricsResult.value){
+    const metrics=metricsResult.value||{};
+    const models=metrics.models||{};
+    $('systemMetering').textContent=String(metrics.metering||'—').toUpperCase();
+    $('systemCalls').textContent=displayNumber(models.calls);
+    $('systemInputTokens').textContent=displayNumber(models.input_tokens);
+    $('systemOutputTokens').textContent=displayNumber(models.output_tokens);
+    $('systemUnknownCosts').textContent=displayNumber(models.unknown_cost_calls);
+    if(models.measured_micro_usd!==undefined&&models.measured_micro_usd!==null){
+      $('systemSpend').textContent=displayUsd(Number(models.measured_micro_usd)/1e6);
+    }
+    const missions=Array.isArray(metrics.missions)?metrics.missions:[];
+    const root=$('systemMissions');root.replaceChildren();
+    if(!missions.length){
+      root.textContent='Для проекта пока нет миссий.';
+    }else{
+      for(const item of missions){
+        const row=document.createElement('div');
+        row.textContent=String(item.status||'unknown').toUpperCase()+' · '+displayNumber(item.count);
+        root.append(row);
+      }
+    }
+  }else{
+    $('systemMetering').textContent='—';
+    $('systemCalls').textContent='—';
+    $('systemInputTokens').textContent='—';
+    $('systemOutputTokens').textContent='—';
+    $('systemUnknownCosts').textContent='—';
+    $('systemMissions').textContent=project?'Метрики проекта недоступны.':'Выберите проект для project-scoped метрик.';
+  }
+}
+function closeSystem(){$('systemPanel').hidden=true;}
+
 
 
 async function loadStudioCatalog(){
@@ -231,6 +322,9 @@ $('studiosOpen').addEventListener('click',()=>openStudioCatalog('studio'));
 $('labsOpen').addEventListener('click',()=>openStudioCatalog('lab'));
 $('studioCatalogClose').addEventListener('click',closeStudioCatalog);
 $('studioCatalog').addEventListener('click',e=>{if(e.target===$('studioCatalog'))closeStudioCatalog();});
+$('systemOpen').addEventListener('click',openSystem);
+$('systemClose').addEventListener('click',closeSystem);
+$('systemPanel').addEventListener('click',e=>{if(e.target===$('systemPanel'))closeSystem();});
 $('projectsOpen').addEventListener('click',openProjects);
 $('projectsClose').addEventListener('click',closeProjects);
 $('projectsPanel').addEventListener('click',e=>{if(e.target===$('projectsPanel'))closeProjects();});

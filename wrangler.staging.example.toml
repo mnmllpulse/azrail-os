@@ -1,0 +1,56 @@
+name = "azrail-os-staging"
+main = "src/index.ts"
+compatibility_date = "2026-08-08"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[durable_objects.bindings]]
+name = "Orchestrator"
+class_name = "Orchestrator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Orchestrator"]
+
+[[d1_databases]]
+binding = "AZRAIL_D1"
+database_name = "azrail-db-staging"
+database_id = "REPLACE_WITH_STAGING_D1_ID"
+
+[[kv_namespaces]]
+binding = "AZRAIL_KV"
+id = "REPLACE_WITH_STAGING_KV_ID"
+
+[[r2_buckets]]
+binding = "AZRAIL_R2"
+bucket_name = "azrail-artifacts-staging"
+
+[ai]
+binding = "AI"
+
+[triggers]
+crons = ["*/10 * * * *"]
+
+[vars]
+AZRAIL_WORKERS_PLAN = "paid"
+AZRAIL_METERING = "observe"
+AZRAIL_MISSION_BUDGET_USD = "0.25"
+AZRAIL_FORCE_FREE = "true"
+CORS_ORIGIN = "*"
+
+[[containers]]
+class_name = "Sandbox"
+image = "./Dockerfile"
+max_instances = 1
+
+[[durable_objects.bindings]]
+name = "AZRAIL_SANDBOX"
+class_name = "Sandbox"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Sandbox"]
