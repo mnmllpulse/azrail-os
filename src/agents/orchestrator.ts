@@ -28,6 +28,8 @@ import {
 import { UsageLedger } from "../lib/usage";
 import { quickIntent } from "../lib/quick-intent";
 import type { RoutingMode } from "../lib/routing-mode";
+import type { StudioId } from "../lib/studio-router";
+import { emitMissionEvent } from "../lib/event-store";
 
 const MIN_PAYLOAD_LENGTH = 8;
 
@@ -87,7 +89,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
    * некому: карта миссии в интерфейсе живёт на сокете. Отсюда отдельный
    * вызов — не дубль хранения, а другая задача: показать сейчас.
    */
-  async broadcastMissionEvent(payload: { id?: string; event: string; tool?: string; reason?: string; iteration?: number; maxIterations?: number; steps?: number; files?: number }, projectId?: string): Promise<void> {
+  async broadcastMissionEvent(payload: { id?: string; event: string; tool?: string; reason?: string; iteration?: number; maxIterations?: number; steps?: number; files?: number; studio?: string; mode?: string; source?: string }, projectId?: string): Promise<void> {
     try {
       await sendProjectEvent(this.env, this.getConnections(), projectId, {type:"mission_event", ...payload});
     } catch (err) {
@@ -482,6 +484,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     maxIterations: number;
     preferredModel?: string;
     preferredMode?: RoutingMode;
+    preferredStudio?: StudioId;
     publicHostname?: string;
   }): Promise<{ scheduled: true; missionId: string }> {
     const delivered=await this.ctx.storage.get<boolean>(`delivery:${params.missionId}`);
@@ -598,6 +601,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     maxIterations: number;
     preferredModel?: string;
     preferredMode?: RoutingMode;
+    preferredStudio?: StudioId;
     publicHostname?: string;
   }): Promise<void> {
     const { missionId, projectId, goal } = params;
@@ -613,6 +617,25 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
       if (!await markRunning(this.env, missionId)) return;
       stopHeartbeat = await this.keepAlive();
       await initializeMissionBudget(this.env, missionId);
+      if (params.preferredStudio) {
+        try {
+          await emitMissionEvent(this.env, missionId, "studio_routed", {
+            studio: params.preferredStudio,
+            mode: params.preferredMode ?? "auto",
+          });
+          await this.broadcastMissionEvent({
+            event: "studio_routed",
+            studio: params.preferredStudio,
+            mode: params.preferredMode ?? "auto",
+            source: "mission",
+          }, projectId);
+        } catch (err) {
+          log("warn", "mission.studio_event_failed", {
+            missionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       const engine = new ExecutionEngine(this.env);
       const result = await engine.runMission(
         { message: goal, projectId, preferredModel: params.preferredModel, preferredMode: params.preferredMode },
