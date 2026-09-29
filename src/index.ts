@@ -47,6 +47,7 @@ import { defaultIterationsForMode, normalizeRoutingMode } from "./lib/routing-mo
 import { createProject as createProjectApi, getProject as getProjectApi, listProjects as listProjectsApi, updateProject as updateProjectApi } from "./lib/projects-api";
 import { heartbeatPresence, listPresence } from "./lib/presence";
 import { loadProjectWorkspace } from "./lib/project-workspace";
+import { projectObservability } from "./lib/observability";
 
 export { Orchestrator };
 
@@ -504,6 +505,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       await env.AZRAIL_D1.prepare("INSERT INTO resource_owners VALUES(?,?,?) ON CONFLICT(kind,resource_id) DO UPDATE SET account_id=excluded.account_id").bind(kind,id,account).run();
       return json({success:true},env);
     }
+    if (url.pathname === "/api/observability" && request.method === "GET") {
+      const projectId = url.searchParams.get("projectId");
+      if (!projectId) return json({ error: "projectId обязателен." }, env, 400);
+      return json({ success: true, observability: await projectObservability(env, projectId) }, env);
+    }
+
     if(url.pathname === "/api/metrics" && request.method === "GET") {
       const project=url.searchParams.get("projectId");
       if(!project)return json({error:"projectId обязателен."},env,400);
