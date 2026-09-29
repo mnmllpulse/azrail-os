@@ -46,6 +46,7 @@ import { normalizeAzrailRequest } from "./protocol/facade";
 import { defaultIterationsForMode, normalizeRoutingMode } from "./lib/routing-mode";
 import { createProject as createProjectApi, getProject as getProjectApi, listProjects as listProjectsApi, updateProject as updateProjectApi } from "./lib/projects-api";
 import { heartbeatPresence, listPresence } from "./lib/presence";
+import { loadProjectWorkspace } from "./lib/project-workspace";
 
 export { Orchestrator };
 
@@ -426,6 +427,27 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           throw err;
         }
       }
+    }
+
+    const workspaceRoute = url.pathname.match(/^\/api\/projects\/([^/]+)\/workspace$/);
+    if (workspaceRoute && request.method === "GET") {
+      let projectId: string;
+      try {
+        projectId = decodeURIComponent(workspaceRoute[1]);
+      } catch {
+        return json({ error: "Некорректный projectId." }, env, 400);
+      }
+      const snapshot = await loadProjectWorkspace(env, projectId);
+      const orchestrator = await getAgentByName(env.Orchestrator, projectId);
+      const history = await orchestrator.getHistory(projectId, 20);
+      return json({
+        success: true,
+        projectId,
+        files: snapshot.files,
+        memory: snapshot.memory,
+        versions: snapshot.versions,
+        history,
+      }, env);
     }
 
     if (url.pathname === "/api/routing-settings" && request.method === "GET") {
