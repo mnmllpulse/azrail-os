@@ -264,3 +264,31 @@ describe("Standalone System view", () => {
     expect(system).not.toMatch(/innerHTML\s*=/);
   });
 });
+
+
+describe("Measured System observability", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const pulse = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+  const system = fs.readFileSync(path.join(root, "public/system.js"), "utf8");
+
+  it("сохраняет только выданный сервером write budget", () => {
+    expect(pulse).toContain("if(d.budget)cached('azrail_pulse_write_budget',JSON.stringify(d.budget))");
+    expect(system).toContain("azrail_pulse_write_budget");
+  });
+
+  it("показывает фактические metering и routing policy поля", () => {
+    expect(system).toContain("monthlyBudgetUsd");
+    expect(system).toContain("committedUsd");
+    expect(system).toContain("unknown_cost_calls");
+    expect(system).toContain("measured_micro_usd");
+    expect(system).toContain("mean_ms");
+    expect(system).toContain("gatewayConfigured");
+    expect(system).toContain("workersPlan");
+  });
+
+  it("не содержит декоративных числовых метрик", () => {
+    expect(system).not.toMatch(/Math\.random\(\).*metric/i);
+    expect(system).not.toMatch(/fake|demo metric|placeholder metric/i);
+    expect(system).not.toMatch(/innerHTML\s*=/);
+  });
+});
