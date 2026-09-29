@@ -4,6 +4,7 @@ import path from "node:path";
 import { canonicalApiPath } from "../src/protocol/facade";
 import { validateProjectDescription, validateProjectName } from "../src/lib/projects-api";
 import { capabilitiesForMode, defaultIterationsForMode, normalizeRoutingMode, tierPreferenceForMode } from "../src/lib/routing-mode";
+import { modeForStudio, routeStudio } from "../src/lib/studio-router";
 
 describe("Pulse OS → AZRAIL facade", () => {
   it("нормализует mission API до старого защищённого маршрута", () => {
@@ -161,5 +162,57 @@ describe("Studio and Labs consolidation", () => {
 
   it("не использует innerHTML для project/studio данных", () => {
     expect(client).not.toMatch(/innerHTML\s*=/);
+  });
+});
+
+
+describe("Automatic Studio routing", () => {
+  it("маршрутизирует очевидные задачи без вызова модели", () => {
+    expect(routeStudio("Исправь TypeScript ошибки и тесты").studio).toBe("development");
+    expect(routeStudio("Подготовь дизайн интерфейса и визуальный стиль").studio).toBe("creative");
+    expect(routeStudio("Сделай анализ музыкальной аранжировки трека").studio).toBe("audio");
+    expect(routeStudio("Настрой Cloudflare deploy и observability").studio).toBe("operations");
+    expect(routeStudio("Проведи benchmark и измерь результат").studio).toBe("pulse-lab");
+  });
+
+  it("уважает явный Studio hint и оставляет спорное на AUTO", () => {
+    expect(routeStudio("Любая задача", "agents").studio).toBe("agents");
+    expect(routeStudio("Привет, помоги с идеей").studio).toBe("auto");
+  });
+
+  it("преобразует Studio в реальный routing mode", () => {
+    expect(modeForStudio("development")).toBe("code");
+    expect(modeForStudio("audio")).toBe("creative");
+    expect(modeForStudio("intelligence")).toBe("deep");
+    expect(modeForStudio("operations")).toBe("balanced");
+  });
+});
+
+describe("Consolidation regressions", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+  const api = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+
+  const count = (text: string, needle: string) => text.split(needle).length - 1;
+
+  it("не возвращает дубли Projects/Studio/Advanced", () => {
+    expect(count(shell, 'id="projectsPanel"')).toBe(1);
+    expect(count(shell, 'id="studioCatalog"')).toBe(1);
+    expect(count(shell, 'id="capabilitiesPanel"')).toBe(0);
+    expect(count(shell, 'href="/ultimate.html"')).toBe(1);
+    expect(count(client, "async function openProjects(")).toBe(1);
+    expect(count(client, "$('projectsOpen').addEventListener")).toBe(1);
+  });
+
+  it("передаёт явный Studio hint через тот же mission API", () => {
+    expect(client).toContain("preferredStudio:studioHint||undefined");
+    expect(api).toContain("normalizePreferredStudio(body.preferredStudio)");
+    expect(api).toContain("routeStudio(goal");
+  });
+
+  it("считает write budget после разрешения AUTO → Studio → Mode", () => {
+    expect(api).toContain("estimateMissionWrites(maxIterations)");
+    expect(api.indexOf("const studioRoute = routeStudio")).toBeLessThan(api.indexOf("const budget = await chargeWrites"));
   });
 });
