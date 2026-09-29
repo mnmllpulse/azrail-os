@@ -29,6 +29,7 @@ import {
 import { clearExhausted, cooldownRemaining, isQuotaError, markExhausted } from "./model-health";
 import { log, withRetry } from "./resilience";
 import type { Env } from "../types";
+import { capabilitiesForMode, tierPreferenceForMode, type RoutingMode } from "./routing-mode";
 
 /**
  * Оценивает сложность по БЕСПЛАТНЫМ сигналам — без вызова модели.
@@ -87,6 +88,8 @@ export interface RouteRequirements {
    * показ не расходился с тем, что произойдёт на самом деле.
    */
   gatewayAvailable?: boolean;
+  /** Явный профиль интерфейса. Меняет порядок классов, но не обходит capability/policy checks. */
+  mode?: RoutingMode;
 }
 
 export interface RouteDecision {
@@ -114,9 +117,9 @@ export function route(
   registry: ModelEntry[] = MODEL_REGISTRY,
 ): RouteDecision {
   const policy: RoutePolicy = policyFor(intent);
-  const required = [...policy.requires, ...(req.needs ?? [])];
+  const required = [...new Set([...policy.requires, ...capabilitiesForMode(req.mode), ...(req.needs ?? [])])];
   const complexity = req.complexity ?? "normal";
-  const tiers = tiersFor(policy, complexity);
+  const tiers = tierPreferenceForMode(req.mode) ?? tiersFor(policy, complexity);
   const unavailable = new Set(req.unavailable ?? []);
 
   const reasoning: string[] = [`Задача "${intent}" требует: ${required.join(", ") || "ничего особенного"}.`];
@@ -166,7 +169,7 @@ export function route(
     const i = tiers.indexOf(m.tier);
     return i === -1 ? tiers.length : i;
   };
-  const candidates = passed.sort((a, b) => rank(a) - rank(b));
+  const candidates = [...passed].sort((a, b) => rank(a) - rank(b));
 
   if (candidates.length === 0) {
     reasoning.push("Ни одна модель в реестре не подошла — задача уйдёт с ошибкой, а не на случайную модель.");
