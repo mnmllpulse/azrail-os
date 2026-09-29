@@ -6,7 +6,9 @@ const uuid=()=>typeof crypto.randomUUID==='function'?crypto.randomUUID():String(
 let token=cached('azrail_ultimate_token');
 let project=cached('azrail_pulse_project');
 let mission=cached('azrail_pulse_mission');
-let timer=null,busy=false;
+let timer=null,busy=false,presenceTimer=null,globeReady=false;
+const presenceSession=cached('azrail_pulse_presence')||('s_'+uuid().replaceAll('-',''));
+cached('azrail_pulse_presence',presenceSession);
 let mode=cached('azrail_pulse_mode')||'auto';
 const labels={accepted:'Принято',queued:'В очереди',planning:'Планирование',executing:'Выполнение',verifying:'Проверка',checking:'Проверка',repairing:'Исправление',waiting_approval:'Нужно решение',completed:'Готово',done:'Готово',failed:'Ошибка',cancelled:'Остановлено'};
 function notice(t){$('notice').textContent=t||'';}
@@ -23,6 +25,26 @@ async function api(path,opt={}){
 function openAccess(msg){$('access').hidden=false;$('accessKey').value=token;$('accessNotice').textContent=msg||'';$('accessKey').focus();}
 function closeAccess(){$('access').hidden=true;}
 function setBusy(v){busy=v;$('createButton').disabled=v;$('idea').readOnly=v;}
+function sendPresenceToGlobe(sessions){
+  if(!globeReady)return;
+  const frame=$('pulseGlobe');
+  frame?.contentWindow?.postMessage({type:'pulse:presence',sessions:Array.isArray(sessions)?sessions:[]},location.origin);
+}
+async function heartbeatPresence(){
+  clearTimeout(presenceTimer);
+  if(!token||document.hidden)return;
+  try{
+    await api('/api/azrail/presence',{method:'POST',body:{sessionId:presenceSession,projectId:project||undefined}});
+    const qs=new URLSearchParams({sessionId:presenceSession});
+    if(project)qs.set('projectId',project);
+    const d=await api('/api/azrail/presence?'+qs.toString());
+    sendPresenceToGlobe(d.sessions);
+  }catch(e){
+    if(e.status===401)return;
+  }finally{
+    if(token&&!document.hidden)presenceTimer=setTimeout(heartbeatPresence,30000);
+  }
+}
 function setMode(next){
   mode=next||'auto';cached('azrail_pulse_mode',mode);
   for(const b of document.querySelectorAll('[data-mode]'))b.classList.toggle('active',b.dataset.mode===mode);
@@ -36,7 +58,7 @@ function setProgress(status){
 async function connect(){
   const candidate=$('accessKey').value.trim();if(!candidate){$('accessNotice').textContent='Введите ключ доступа.';return;}
   const previous=token;token=candidate;
-  try{const me=await api('/api/azrail/me');cached('azrail_ultimate_token',token);closeAccess();notice('AZRAIL подключён: '+(me.account?.name||'доступ подтверждён')+'.');await ensureProjectList();if(mission)poll();}
+  try{const me=await api('/api/azrail/me');cached('azrail_ultimate_token',token);closeAccess();notice('AZRAIL подключён: '+(me.account?.name||'доступ подтверждён')+'.');await ensureProjectList();heartbeatPresence();if(mission)poll();}
   catch(e){token=previous;$('accessNotice').textContent=e.message;}
 }
 async function ensureProjectList(){
@@ -49,7 +71,7 @@ function projectNameFrom(message){const clean=message.replace(/\s+/g,' ').trim()
 async function ensureProject(message){
   const existing=await ensureProjectList();if(existing)return existing;
   const d=await api('/api/azrail/projects',{method:'POST',body:{name:projectNameFrom(message)}});
-  project=d.project.id;cached('azrail_pulse_project',project);return project;
+  project=d.project.id;cached('azrail_pulse_project',project);heartbeatPresence();return project;
 }
 function renderMission(d){
   $('mission').hidden=false;const m=d.mission||{};
@@ -81,7 +103,14 @@ setMode(mode);
 $('accessConnect').addEventListener('click',connect);
 $('accessClose').addEventListener('click',closeAccess);
 $('accessKey').addEventListener('keydown',e=>{if(e.key==='Enter')connect();});
-document.addEventListener('visibilitychange',()=>{if(document.hidden)clearTimeout(timer);else if(mission)poll();});
-if(token){ensureProjectList().then(()=>{notice('AZRAIL подключён.');if(mission){setBusy(true);poll();}}).catch(e=>{if(e.status===401)openAccess('Ключ нужно проверить повторно.');else notice(e.message);});}
+addEventListener('message',e=>{
+  if(e.origin!==location.origin||e.data?.type!=='pulse:globe-ready')return;
+  globeReady=true;heartbeatPresence();
+});
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){clearTimeout(timer);clearTimeout(presenceTimer);}
+  else{if(mission)poll();heartbeatPresence();}
+});
+if(token){ensureProjectList().then(()=>{notice('AZRAIL подключён.');heartbeatPresence();if(mission){setBusy(true);poll();}}).catch(e=>{if(e.status===401)openAccess('Ключ нужно проверить повторно.');else notice(e.message);});}
 else notice('Введите задачу. При первом запуске система предложит подключить AZRAIL.');
 })();
