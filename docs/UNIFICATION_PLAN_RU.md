@@ -19,34 +19,34 @@
 ### P0 — фундамент
 - [x] Создать integration-ветку от актуального main.
 - [x] Зафиксировать canonical mission protocol.
-- [ ] Добавить Pulse Globe как независимый модуль.
-- [ ] Подключить Pulse Globe к UI без влияния на mission runtime.
-- [ ] Ввести единый `/api/azrail/*` facade.
-- [ ] Отделить transport DTO от внутренних типов агентов.
-- [ ] Ввести Project как верхний объект пользовательской работы.
+- [x] Добавить Pulse Globe как независимый модуль.
+- [x] Подключить Pulse Globe к UI без влияния на mission runtime.
+- [x] Ввести единый `/api/azrail/*` facade.
+- [x] Отделить transport DTO от внутренних типов агентов.
+- [x] Ввести Project как верхний объект пользовательской работы.
 - [ ] Убрать ручной выбор нескольких оркестраторов из основного UX.
 
 ### P1 — интерфейс
-- [ ] Канонизировать Ultimate visual tokens.
+- [x] Канонизировать Ultimate visual tokens.
 - [ ] AppShell / NavigationRail / HeroComposer.
-- [ ] Главный путь: Create → Mission → Result.
+- [x] Главный путь: Create → Mission → Result.
 - [ ] Studio/Labs/Projects как вторичные пространства.
 - [ ] Advanced details для агентов, моделей, инструментов, логов и стоимости.
 
 ### P1 — Globe
-- [ ] Three.js как локальная npm-зависимость для production-компонента.
-- [ ] Медленное вращение.
-- [ ] Три системных орбитальных кольца.
-- [ ] Реальный presence API вместо синтетических значений.
-- [ ] Lazy loading и reduced-motion.
-- [ ] Mobile low-cost rendering profile.
+- [x] Three.js как локальная npm-зависимость для production-компонента.
+- [x] Медленное вращение.
+- [x] Три системных орбитальных кольца.
+- [x] Реальный presence API вместо синтетических значений.
+- [x] Lazy loading и reduced-motion.
+- [x] Mobile low-cost rendering profile.
 
 ### P1 — AZRAIL
-- [ ] Один Orchestrator.
-- [ ] Planner → Agents → Tools → Execute → Verify → Reflect → Repair → Checkpoint.
+- [x] Один Orchestrator.
+- [x] Planner → Agents → Tools → Execute → Verify → Reflect → Repair → Checkpoint.
 - [ ] Автовыбор агентов и студии по intent.
-- [ ] Единый model registry / model policy.
-- [ ] Sandbox execution и жёсткая verification boundary.
+- [x] Единый model registry / model policy.
+- [x] Sandbox execution и жёсткая verification boundary.
 
 ### P2 — консолидация
 - [ ] Перенести старые панели под Advanced/Legacy.
@@ -72,3 +72,13 @@
 - объединение двух D1 без миграционного плана;
 - тяжёлый 3D bundle в initial load;
 - декоративные метрики, не подтверждённые runtime-данными.
+
+
+## Текущий статус
+
+Интеграция разбита на два PR, чтобы не смешивать архитектурный фундамент и productionization Globe.
+
+- PR #1: protocol, Project-first foundation, Pulse Shell, routing profiles — уже merged.
+- PR #2: local Three.js bundle, privacy-preserving live presence, D1 migration, CI — draft до зелёных проверок.
+
+Следующий блок после PR #2: единые Files/Memory/Projects UI, затем Studios consolidation и перенос Legacy в Advanced.
