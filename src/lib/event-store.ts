@@ -2,8 +2,12 @@ import type { Env, MissionEvent } from "../types";
 
 export async function emitMissionEvent(env: Env, missionId: string, type: string, data?: unknown) {
   const event: MissionEvent = { id: crypto.randomUUID(), missionId, type, data, createdAt: new Date().toISOString() };
-  await env.AZRAIL_D1.prepare(`INSERT INTO mission_events (id, mission_id, type, data, created_at) VALUES (?, ?, ?, ?, ?)`)
-    .bind(event.id, missionId, type, JSON.stringify(data ?? null), event.createdAt).run();
+  await env.AZRAIL_D1.batch([
+    env.AZRAIL_D1.prepare(`INSERT INTO mission_events (id, mission_id, type, data, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .bind(event.id, missionId, type, JSON.stringify(data ?? null), event.createdAt),
+    env.AZRAIL_D1.prepare("UPDATE missions SET updated_at=? WHERE id=? AND status IN ('queued','executing','cancelling')")
+      .bind(event.createdAt,missionId),
+  ]);
   return event;
 }
 

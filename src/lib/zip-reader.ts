@@ -61,7 +61,7 @@ export class ZipError extends Error {
 function findEocd(view: DataView): number {
   const min = Math.max(0, view.byteLength - MAX_COMMENT - 22);
   for (let i = view.byteLength - 22; i >= min; i--) {
-    if (view.getUint32(i, true) === SIG_EOCD) return i;
+    if (view.getUint32(i, true) === SIG_EOCD && i + 22 + view.getUint16(i + 20, true) === view.byteLength) return i;
   }
   throw new ZipError("это не ZIP: не найден конец центрального каталога");
 }
@@ -86,12 +86,16 @@ export function listZip(buf: ArrayBuffer, maxEntries = 2000): ZipListing {
     throw new ZipError("архив в формате ZIP64 — не поддерживается");
   }
 
+  const cdSize = view.getUint32(eocd + 12, true);
+  if (view.getUint16(eocd + 4, true) || view.getUint16(eocd + 6, true) || view.getUint16(eocd + 8, true) !== count) throw new ZipError("многотомный ZIP не поддерживается");
+  if (cdOffset + cdSize > eocd) throw new ZipError("границы центрального каталога повреждены");
+  const cdEnd = cdOffset + cdSize;
   const entries: ZipEntry[] = [];
   let p = cdOffset;
   let total = 0;
 
   for (let i = 0; i < count; i++) {
-    if (p + 46 > view.byteLength || view.getUint32(p, true) !== SIG_CENTRAL) {
+    if (p + 46 > cdEnd || view.getUint32(p, true) !== SIG_CENTRAL) {
       throw new ZipError("центральный каталог повреждён");
     }
 
@@ -104,6 +108,8 @@ export function listZip(buf: ArrayBuffer, maxEntries = 2000): ZipListing {
     const commentLen = view.getUint16(p + 32, true);
     const localOffset = view.getUint32(p + 42, true);
 
+    if (p + 46 + nameLen + extraLen + commentLen > cdEnd) throw new ZipError("обрезана запись центрального каталога");
+    const checksum = view.getUint32(p + 16, true);
     const path = decodeName(bytes.subarray(p + 46, p + 46 + nameLen));
     p += 46 + nameLen + extraLen + commentLen;
 
@@ -114,13 +120,15 @@ export function listZip(buf: ArrayBuffer, maxEntries = 2000): ZipListing {
 
     const entry: ZipEntry = { path, size };
 
-    if (flags & FLAG_ENCRYPTED) entry.skipped = "файл зашифрован";
+    if (!path || path.startsWith("/") || path.includes("\\") || /^[A-Za-z]:/.test(path) || path.includes("\0") || path.split("/").some(s => s === ".." || s === ".")) entry.skipped = "небезопасный путь";
+    else if (flags & FLAG_ENCRYPTED) entry.skipped = "файл зашифрован";
     else if (method !== 0 && method !== 8) entry.skipped = `способ сжатия ${method} не поддерживается`;
     else if (size === ZIP64_MARK || compSize === ZIP64_MARK) entry.skipped = "запись в формате ZIP64";
     else {
       // Смещения нужны только для распаковки — прячем их от вызывающего
       // кода за непубличными полями, чтобы их нельзя было принять за часть
       // описания файла.
+      (entry as ZipEntry & { _crc: number })._crc = checksum;
       (entry as ZipEntry & { _off: number; _comp: number; _method: number })._off = localOffset;
       (entry as ZipEntry & { _off: number; _comp: number; _method: number })._comp = compSize;
       (entry as ZipEntry & { _off: number; _comp: number; _method: number })._method = method;
@@ -133,13 +141,31 @@ export function listZip(buf: ArrayBuffer, maxEntries = 2000): ZipListing {
 }
 
 /** Распаковка одного блока. "deflate-raw" — без заголовка zlib, как в ZIP. */
-async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
+async function inflateRaw(data: Uint8Array, limit: number): Promise<Uint8Array> {
   // Blob принимает Uint8Array; приведение — обход конфликта версий
   // workers-types в этой связке зависимостей, тот же, что описан в upload.ts.
   const stream = (new Blob([data as unknown as ArrayBufferView]) as unknown as { stream(): ReadableStream })
     .stream()
     .pipeThrough(new DecompressionStream("deflate-raw"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel().catch(() => {});
+        throw new ZipError("распакованный файл превышает лимит");
+      }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const out = new Uint8Array(size);
+  let pos = 0;
+  for (const chunk of chunks) { out.set(chunk, pos); pos += chunk.length; }
+  return out;
 }
 
 /**
@@ -149,10 +175,11 @@ async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
  * отличаться от тех же полей в центральном каталоге — это законно по
  * спецификации, и доверять здесь центральному каталогу нельзя.
  */
-export async function readEntry(buf: ArrayBuffer, entry: ZipEntry): Promise<Uint8Array> {
-  const meta = entry as ZipEntry & { _off?: number; _comp?: number; _method?: number };
+export async function readEntry(buf: ArrayBuffer, entry: ZipEntry, maxBytes = 1024 * 1024): Promise<Uint8Array> {
+  const meta = entry as ZipEntry & { _off?: number; _comp?: number; _method?: number; _crc?: number };
   if (meta._off === undefined) throw new ZipError(entry.skipped ?? "запись нечитаема");
 
+  if (entry.size > maxBytes) throw new ZipError("файл превышает лимит чтения");
   const view = new DataView(buf);
   const bytes = new Uint8Array(buf);
   const off = meta._off;
@@ -169,5 +196,13 @@ export async function readEntry(buf: ArrayBuffer, entry: ZipEntry): Promise<Uint
   if (end > bytes.byteLength) throw new ZipError(`данные файла ${entry.path} обрезаны`);
 
   const raw = bytes.subarray(start, end);
-  return meta._method === 0 ? raw : inflateRaw(raw);
+  const out = meta._method === 0 ? raw : await inflateRaw(raw, Math.min(entry.size, maxBytes));
+  if (out.length !== entry.size || out.length > maxBytes) throw new ZipError("размер файла не совпадает с каталогом");
+  let crc = 0xffffffff;
+  for (const byte of out) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  }
+  if (((crc ^ 0xffffffff) >>> 0) !== meta._crc) throw new ZipError("контрольная сумма CRC32 не совпадает");
+  return out;
 }

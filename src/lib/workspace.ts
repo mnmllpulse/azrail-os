@@ -1,11 +1,12 @@
+import { workspacePrefix, storedWorkspacePath, logicalWorkspacePath } from "./workspace-head";
 import type { Env } from "../types";
-import { pathSegments } from "./safe-path";
 import { applyHunks, type Hunk } from "./patch";
 
-const PREFIX = (projectId: string) => `projects/${projectId}/workspace/`;
+
 
 export async function writeFile(env: Env, projectId: string, path: string, content: string) {
-  const key = PREFIX(projectId) + pathSegments(path, "workspace path");
+  const prefix = await workspacePrefix(env, projectId);
+  const key = prefix + storedWorkspacePath(prefix, path);
   await env.AZRAIL_R2.put(key, content, { httpMetadata: { contentType: "text/plain; charset=utf-8" } });
   return { key, path, bytes: new TextEncoder().encode(content).byteLength };
 }
@@ -60,21 +61,38 @@ export async function writeFileGuarded(
   }
 
   const result = await writeFile(env, projectId, path, content);
-  return { ...result, replaced: !!existing, previousBytes: existing ? existing.content.length : 0 };
+  return { ...result, replaced: !!existing, previousBytes: existing ? new TextEncoder().encode(existing.content).byteLength : 0 };
 }
 
 export async function readFile(env: Env, projectId: string, path: string) {
-  const key = PREFIX(projectId) + pathSegments(path, "workspace path");
+  const prefix = await workspacePrefix(env, projectId);
+  const key = prefix + storedWorkspacePath(prefix, path);
   const obj = await env.AZRAIL_R2.get(key);
   if (!obj) return null;
   return { path, content: await obj.text(), key };
 }
 
-export async function listFiles(env: Env, projectId: string, limit = 500) {
-  const listed = await env.AZRAIL_R2.list({ prefix: PREFIX(projectId), limit });
-  return listed.objects.map(o => ({ path: o.key.slice(PREFIX(projectId).length), size: o.size, uploaded: o.uploaded }));
+/** Pagination is explicit so callers can distinguish a partial view from the whole project. */
+export async function listFilesPage(env: Env, projectId: string, limit = 500) {
+  const cap = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.floor(limit))) : 500;
+  const prefix = await workspacePrefix(env,projectId);
+  const objects: R2Object[] = [];
+  let cursor: string | undefined;
+  let truncated = false;
+  const seen = new Set<string>();
+  do {
+    const page = await env.AZRAIL_R2.list({prefix, limit:cap-objects.length, cursor});
+    objects.push(...page.objects);
+    truncated = !!page.truncated;
+    if (!page.truncated || objects.length >= cap) break;
+    if (!page.cursor || seen.has(page.cursor)) throw new Error("Incomplete R2 listing");
+    seen.add(page.cursor); cursor = page.cursor;
+  } while (true);
+  return {files:objects.map(o => ({path:logicalWorkspacePath(prefix,o.key.slice(prefix.length)),size:o.size,uploaded:o.uploaded})), truncated};
 }
-
+export async function listFiles(env: Env, projectId: string, limit = 500) {
+  return (await listFilesPage(env,projectId,limit)).files;
+}
 
 export async function editFile(env: Env, projectId: string, path: string, search: string, replacement: string) {
   const current = await readFile(env, projectId, path);
@@ -129,29 +147,29 @@ export async function searchFiles(env: Env, projectId: string, needle: string, l
    * просмотрено не всё — это СКАЗАНО. Молча урезанный результат хуже
    * честно неполного: по нему делают вывод «такого в проекте нет».
    */
-  const files = (await listFiles(env, projectId, 500)).slice(0, SEARCH_SCAN_CAP);
-  const scannedAll = files.length < SEARCH_SCAN_CAP;
-  const out: { path: string }[] = [];
-
-  for (let i = 0; i < files.length && out.length < limit; i += SEARCH_BATCH) {
-    const batch = files.slice(i, i + SEARCH_BATCH);
-    const read = await Promise.all(
-      batch.map(async (f) => {
-        try {
-          const file = await readFile(env, projectId, f.path);
-          return file?.content.includes(needle) ? f.path : null;
-        } catch {
-          // Один нечитаемый файл не должен обрывать весь поиск.
-          return null;
-        }
-      }),
-    );
-    for (const hit of read) {
-      if (hit && out.length < limit) out.push({ path: hit });
+  const page = await listFilesPage(env, projectId, SEARCH_SCAN_CAP);
+  const files = page.files;
+  const cap = Number.isFinite(limit) ? Math.max(1,Math.min(500,Math.floor(limit))) : 50;
+  const out: {path:string}[] = [];
+  let scanned = 0, unreadable = 0, matchesTruncated = false;
+  for (let i=0; i<files.length && out.length<cap; i+=SEARCH_BATCH) {
+    const batch = files.slice(i,i+SEARCH_BATCH);
+    const results = await Promise.all(batch.map(async f => {
+      try {
+        const file = await readFile(env,projectId,f.path);
+        if (!file) { unreadable++; return null; }
+        return file.content.includes(needle) ? f.path : null;
+      } catch { unreadable++; return null; }
+    }));
+    scanned += batch.length;
+    for (const hit of results) {
+      if (hit && out.length < cap) out.push({path:hit});
+      else if (hit) matchesTruncated = true;
     }
   }
-
-  return { matches: out, scannedAll, scanned: files.length };
+  return {matches:out, scanned, unreadable,
+    scannedAll:!page.truncated && scanned===files.length && unreadable===0,
+    matchesTruncated:matchesTruncated || scanned<files.length || page.truncated};
 }
 
 

@@ -942,6 +942,8 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
   </div>
   <div class="nav-group">
     <div class="nav-label">Система</div>
+    <a class="nav-item" href="/ultimate.html"><i class="nav-dot"></i><span>Новый рабочий экран</span></a>
+    <a class="nav-item" href="/control.html"><i class="nav-dot"></i><span>Проект и студии</span></a>
     <button class="nav-item" data-open="viewOps"><i class="nav-dot"></i><span>Служебное</span></button>
     <button class="nav-item" id="navTools" data-open="viewSkills"><i class="nav-dot"></i><span>Умения</span><i class="sub" id="toolCount"></i></button>
   </div>
@@ -963,7 +965,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
   </section>
 
   <div class="panel">
-    <div class="panel-head"><span class="panel-title">Задача</span></div>
+    <div class="panel-head"><span class="panel-title">Что нужно сделать?</span></div>
     <div class="panel-body">
 
       <section class="stage" id="askStage">
@@ -2686,7 +2688,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     // использовании (см. lib/ws-ticket.ts). Утечь может так же — но
     // утекает уже мусор.
     $('wsBadge').textContent = 'подключаюсь…';
-    api('/api/stream/ticket', { method: 'POST' })
+    api('/api/stream/ticket', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({projectId:currentProject}) })
       .then(function (t) { openSocket(t.ticket); })
       .catch(function (e) {
         $('wsBadge').textContent = 'ошибка соединения'; $('wsBadge').className = 'badge bad';
@@ -2696,7 +2698,7 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
 
   function openSocket(ticket) {
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var url = proto + '//' + location.host + '/api/stream?ticket=' + encodeURIComponent(ticket);
+    var url = proto + '//' + location.host + '/api/stream?ticket=' + encodeURIComponent(ticket) + '&projectId=' + encodeURIComponent(currentProject);
     ws = new WebSocket(url);
 
     ws.onopen = function () {
@@ -3769,6 +3771,16 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     })
     .catch(function () { /* без токена список недоступен — не ошибка */ });
 
+  if (token) api('/api/me').then(function (me) {
+    if (me.account.role !== 'admin') {
+      var accountProject = 'p_' + me.account.id.replace(/-/g, '');
+      if (!currentProject || currentProject.indexOf(accountProject) !== 0) {
+        currentProject = accountProject;
+        local.set('azrail_project', currentProject);
+      }
+    }
+    $('pulseText').textContent = me.account.name;
+  }).catch(function () {});
 })();
 </script>
 

@@ -1,5 +1,13 @@
-import { getAgentByName, routeAgentRequest } from "agents";
+import { readModelPolicy, setModelPolicy, modelBlockReason, FREE_MODEL_SLUGS, ModelPolicyError } from "./lib/model-policy";
+import { readLiveCatalog } from "./lib/model-catalog";
+import { backupProject, restoreBackup } from "./lib/backups";
+import { withProjectLock } from "./lib/project-control";
+import { dispatchOutbox } from "./lib/outbox";
+import { authenticate, authorizeRequest, createAccount, requireResource, activeAccount, administrator, AccessError, type Principal } from "./lib/accounts";
+import { getAgentByName } from "agents";
 import type { Env, TaskRequest, TaskResult, AttachmentRef } from "./types";
+import { cleanupSecurityState } from "./lib/quota";
+import { readBoundedBody, BodyLimitError, validateJsonObject } from "./lib/request-body";
 import { getCors } from "./lib/cors";
 import { Orchestrator } from "./agents/orchestrator";
 import { forgetFact, listFacts, type MemoryCategory } from "./lib/memory-agent";
@@ -12,21 +20,23 @@ import { listMissionEvents } from "./lib/event-store";
 import { MODEL_REGISTRY, providerIcon } from "./lib/model-registry";
 import { clampIterations } from "./lib/mission-limits";
 import { extractText, runModel } from "./lib/model-router";
-import { checkAuth, checkRateLimit } from "./lib/auth";
+import { UsageLedger } from "./lib/usage";
+import { checkRateLimit } from "./lib/auth";
 import { chargeWrites, estimateMissionWrites } from "./lib/write-budget";
 import { validateAgainstCanon, summarizeCanon } from "./lib/canon-check";
 import { loadAttachments, attachmentsToText } from "./lib/attachments";
 import { log } from "./lib/resilience";
 import {
   MAX_PENDING_HINTS,
-  finishMission,
   isTerminal,
   reapStaleMissions,
   requestCancel,
   sendHint,
 } from "./lib/mission-state";
 import { issueTicket, redeemTicket } from "./lib/ws-ticket";
-import { lookup as idemLookup, readKey as idemKey, remember as idemRemember } from "./lib/idempotency";
+import { readKey as idemKey } from "./lib/idempotency";
+import { createMission } from "./lib/mission-concurrency";
+import { claimMission, finishAdmission } from "./lib/mission-admission";
 import { SEED_CASES } from "./bench/cases";
 import { runBench } from "./bench/runner";
 import { listRuns, loadOutcomes, saveRun } from "./bench/store";
@@ -86,8 +96,36 @@ export default {
     // которого ждёт клиент. Общая сетка ниже не меняет поведение уже
     // обработанных путей — она ловит только то, что раньше не ловилось нигде.
     try {
+      const path = new URL(request.url).pathname;
+      const key = path === "/api/mission" && request.method === "POST" ? idemKey(request) : "";
+      if (key) {
+        const auth = await authenticate(request, env);
+        if (!auth.ok) return json({error:auth.error},env,auth.status ?? 401);
+        let raw: string;
+        try {
+          raw = new TextDecoder().decode(await readBoundedBody(request, MAX_TASK_BODY_BYTES));
+          validateJsonObject(JSON.parse(raw));
+        } catch (err) {
+          return json({error:err instanceof Error ? err.message : "Некорректный JSON."},env,err instanceof BodyLimitError ? 413 : 400);
+        }
+        await authorizeRequest(env,auth.principal!,request,JSON.parse(raw));
+        const admission = await claimMission(env, `${auth.caller}:${key}`, raw);
+        if (admission.kind === "replay") return new Response(admission.body, {
+          status:admission.status, headers:getCors(env,{"Content-Type":"application/json", "Idempotency-Replayed":"true"}),
+        });
+        if (admission.kind !== "claimed") return json({
+          error:admission.kind === "conflict" ? "Этот Idempotency-Key уже использован с другим содержимым." : "Запрос уже принят и обрабатывается; повторите позже с тем же ключом.",
+          code:admission.kind === "conflict" ? "idempotency_conflict" : "idempotency_pending",
+        },env,409);
+        const response = await handleRequest(new Request(request,{body:raw}),env);
+        try { await finishAdmission(env,`${auth.caller}:${key}`,admission.claim,response); }
+        catch (err) { log("error","admission.finalize_failed",{error:err instanceof Error ? err.message : String(err)}); }
+        return response;
+      }
       return await handleRequest(request, env);
     } catch (err) {
+      if (err instanceof URIError) return json({error:"Некорректная кодировка пути."},env,400);
+      if (err instanceof AccessError) return json({error:err.message},env,err.status);
       log("error", "fetch.uncaught", {
         path: new URL(request.url).pathname,
         method: request.method,
@@ -112,6 +150,8 @@ export default {
     ctx.waitUntil(
       (async () => {
         try {
+          await cleanupSecurityState(env);
+          await dispatchOutbox(env);
           const { reaped } = await reapStaleMissions(env);
           log("info", "cron.reaper_done", { cron: event.cron, reaped });
         } catch (err) {
@@ -126,8 +166,17 @@ export default {
 
 async function handleRequest(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    let principal: Principal = administrator;
+    let parsedBody: Record<string, unknown> = {};
+    // SDK RPC bypasses application validation and budgets. Only /api/stream is public transport.
+    if (url.pathname === "/agents" || url.pathname.startsWith("/agents/")) {
+      return json({ error: "Прямой доступ к агентам отключён." }, env, 404);
+    }
+
 
     if (url.pathname === "/health") {
+      const auth = await authenticate(request, env);
+      if (!auth.ok) return json({ error: auth.error }, env, auth.status ?? 401);
       // Раньше здесь проверялось только наличие биндинга (`!!env.AZRAIL_D1`) —
       // это показывало "всё зелено" даже когда D1 недоступна. Теперь делается
       // реальный round-trip к каждому сервису.
@@ -194,6 +243,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // на несуществующий tests/routes.test.ts — файла с таким именем в
     // проекте нет, тест живёт в общем регрессионном файле.
     const isProtected =
+      url.pathname.startsWith("/api/") ||
       url.pathname === "/api/task" ||
       url.pathname === "/api/upload" ||
       url.pathname === "/api/agents" ||
@@ -224,23 +274,28 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
        * эндпоинтов — значит раздать его насовсем.
        *
        * Билет годен минуту и один раз (см. lib/ws-ticket.ts): утечь он
-       * может так же легко, но утекает уже мусор. Токен в query всё ещё
-       * принимается checkAuth — ради curl и старых клиентов, но интерфейс
-       * им больше не пользуется. */
+       * может так же легко, но постоянный токен в query больше не принимается.
+       * Старые клиенты должны использовать Authorization или одноразовый билет. */
       const ticket = url.pathname === "/api/stream" ? url.searchParams.get("ticket") : null;
       const auth = ticket
         ? await (async () => {
-            const caller = await redeemTicket(env, ticket);
+            const stored = await redeemTicket(env, ticket);
+            let data: {account:string;project:string} | null = null;
+            try { data=stored?JSON.parse(stored):null; } catch { /* old tickets expire within a minute */ }
+            const account=data?await activeAccount(env,data.account):null;
+            const caller=account && data?.project===(url.searchParams.get("projectId")??"default") ? account.id : null;
+            if(account && caller) { await requireResource(env,account,"project",data!.project); principal=account; }
             return caller
-              ? { ok: true as const, caller }
+              ? { ok: true as const, caller, principal }
               : { ok: false as const, status: 401, error: "Билет недействителен или уже использован." };
           })()
-        : checkAuth(request, env);
+        : await authenticate(request, env);
       if (!auth.ok) {
         log("warn", "auth.rejected", { path: url.pathname, status: auth.status });
         return json({ error: auth.error }, env, auth.status ?? 401);
       }
 
+      principal = auth.principal ?? principal;
       // Лимит — на всё, что реально запускает модели. Раньше здесь стоял
       // только /api/task, и это была дыра: /api/mission прогоняет ЦИКЛ до
       // двадцати вызовов модели, а лимита на нём не было вовсе. Самый
@@ -255,7 +310,21 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         "/api/polish": 1,
         "/api/mission": 0, // считается ниже по maxIterations
       };
-      if (url.pathname in MODEL_ROUTES) {
+      // Bound actual streamed bytes before parsing or cloning, not only Content-Length.
+      if (request.method === "POST" && url.pathname !== "/api/upload") {
+        try {
+          const bytes = await readBoundedBody(request, MAX_TASK_BODY_BYTES);
+          const raw = bytes.length ? new TextDecoder().decode(bytes) : "{}";
+          parsedBody=JSON.parse(raw);
+          validateJsonObject(parsedBody);
+          request = new Request(request, { body: raw });
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : "Некорректный JSON." }, env,
+            err instanceof BodyLimitError ? 413 : 400);
+        }
+      }
+      await authorizeRequest(env,principal,request,parsedBody);
+      if (request.method === "POST" && url.pathname in MODEL_ROUTES) {
         let cost = MODEL_ROUTES[url.pathname];
         if (url.pathname === "/api/mission") {
           // Тело нужно прочитать заранее, чтобы узнать потолок шагов.
@@ -281,12 +350,91 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       }
     }
 
+    if (url.pathname === "/api/routing-settings" && request.method === "GET") {
+      const policy = await readModelPolicy(env);
+      const month = `paid-month:${new Date().toISOString().slice(0,7)}`;
+      const spend = await env.AZRAIL_D1.prepare("SELECT spent_micro_usd FROM spend_limits WHERE scope=?").bind(month).first<{spent_micro_usd:number}>();
+      return json({policy, gatewayConfigured:!!env.AI_GATEWAY_ID, workersPlan:env.AZRAIL_WORKERS_PLAN??"unknown",
+        committedUsd:(spend?.spent_micro_usd??0)/1e6, month:month.slice(11),
+        note:"OFF блокирует платные маршруты AZRAIL. Квоты Workers, R2 и других сервисов учитываются отдельно."},env);
+    }
+    if (url.pathname === "/api/admin/routing-settings" && request.method === "POST") {
+      try { return json({policy:await setModelPolicy(env,parsedBody.allowThirdPartyModels,parsedBody.monthlyBudgetUsd)},env); }
+      catch (e) { if(e instanceof ModelPolicyError) return json({error:e.message},env,400); throw e; }
+    }
+    if (url.pathname === "/api/model-catalog" && request.method === "GET") {
+      return json(await readLiveCatalog(env),env);
+    }
+    if(url.pathname === "/api/admin/billing" && request.method === "GET") {
+      const limits=await env.AZRAIL_D1.prepare("SELECT * FROM spend_limits ORDER BY scope LIMIT 100").all();
+      const prices=await env.AZRAIL_D1.prepare("SELECT * FROM model_prices ORDER BY model LIMIT 200").all();
+      return json({limits:limits.results,prices:prices.results,mode:env.AZRAIL_METERING??"off"},env);
+    }
+    if(url.pathname === "/api/admin/billing" && request.method === "POST") {
+      if(parsedBody.model) {
+        const input=Number(parsedBody.inputRate),output=Number(parsedBody.outputRate);
+        if(!Number.isSafeInteger(input)||!Number.isSafeInteger(output)||input<0||output<0||input>1e12||output>1e12) return json({error:"Тарифы задаются в micro-USD за миллион токенов, от 0 до 1e12."},env,400);
+        await env.AZRAIL_D1.prepare("INSERT INTO model_prices VALUES(?,?,?,?) ON CONFLICT(model) DO UPDATE SET input_micro_usd_per_million=excluded.input_micro_usd_per_million,output_micro_usd_per_million=excluded.output_micro_usd_per_million,updated_at=excluded.updated_at").bind(String(parsedBody.model),input,output,Date.now()).run();
+      } else {
+        const usd=Number(parsedBody.usd),scope=String(parsedBody.scope??"global");
+        if(!Number.isFinite(usd)||usd<=0||usd>1000||scope.length>256)return json({error:"Допустимый бюджет: больше 0, до 1000 USD; область до 256 символов."},env,400);
+        await env.AZRAIL_D1.prepare("INSERT INTO spend_limits(scope,limit_micro_usd) VALUES(?,?) ON CONFLICT(scope) DO UPDATE SET limit_micro_usd=excluded.limit_micro_usd").bind(scope,Math.floor(usd*1e6)).run();
+      }
+      return json({success:true,mode:env.AZRAIL_METERING??"off"},env);
+    }
+    if(url.pathname === "/api/admin/ownership" && request.method === "POST") {
+      const kind=String(parsedBody.kind),id=String(parsedBody.resourceId),account=String(parsedBody.accountId);
+      if(!["project","conversation","upload"].includes(kind)||!await activeAccount(env,account))return json({error:"Неверный владелец или тип ресурса."},env,400);
+      await env.AZRAIL_D1.prepare("INSERT INTO resource_owners VALUES(?,?,?) ON CONFLICT(kind,resource_id) DO UPDATE SET account_id=excluded.account_id").bind(kind,id,account).run();
+      return json({success:true},env);
+    }
+    if(url.pathname === "/api/metrics" && request.method === "GET") {
+      const project=url.searchParams.get("projectId");
+      if(!project)return json({error:"projectId обязателен."},env,400);
+      const missions=await env.AZRAIL_D1.prepare("SELECT status,COUNT(*) AS count FROM missions WHERE project_id=? GROUP BY status").bind(project).all();
+      const calls=await env.AZRAIL_D1.prepare("SELECT COUNT(*) AS calls,SUM(prompt_tokens) AS input_tokens,SUM(completion_tokens) AS output_tokens,SUM(actual_micro_usd) AS measured_micro_usd,SUM(CASE WHEN actual_micro_usd IS NULL THEN 1 ELSE 0 END) AS unknown_cost_calls,AVG(finished_at-started_at) AS mean_ms FROM model_calls WHERE scope=? OR scope IN (SELECT 'mission:'||id FROM missions WHERE project_id=?)").bind(`project:${project}`,project).first();
+      return json({missions:missions.results,models:calls,metering:env.AZRAIL_METERING??"off"},env);
+    }
+    if(url.pathname === "/api/backups" && request.method === "POST") {
+      const project=String(parsedBody.projectId??"");if(!project)return json({error:"projectId обязателен."},env,400);
+      return json(await backupProject(env,project),env,201);
+    }
+    if(url.pathname === "/api/backups" && request.method === "GET") {
+      const project=url.searchParams.get("projectId");if(!project)return json({error:"projectId обязателен."},env,400);
+      return json({backups:(await env.AZRAIL_D1.prepare("SELECT id,created_at,file_count FROM backup_manifests WHERE project_id=? ORDER BY created_at DESC LIMIT 50").bind(project).all()).results},env);
+    }
+    if(url.pathname === "/api/backups/restore" && request.method === "POST") {
+      const project=String(parsedBody.projectId??""),target=String(parsedBody.targetProjectId??"");
+      await requireResource(env,principal,"project",target,true);
+      return json(await restoreBackup(env,project,String(parsedBody.backupId??""),target),env);
+    }
+
+    if(url.pathname === "/api/me" && request.method === "GET") return json({account:principal},env);
+    if(url.pathname === "/api/admin/accounts" && request.method === "POST") {
+      const account=await createAccount(env,String(parsedBody.name??""),String(parsedBody.role??"editor") as "editor",Number(parsedBody.days??30));
+      return json({account},env,201);
+    }
+    if(url.pathname === "/api/admin/accounts" && request.method === "GET") {
+      return json({accounts:(await env.AZRAIL_D1.prepare("SELECT id,name,role,expires_at,disabled FROM access_accounts").all()).results},env);
+    }
+    if(url.pathname === "/api/admin/accounts/revoke" && request.method === "POST") {
+      await env.AZRAIL_D1.prepare("UPDATE access_accounts SET disabled=1 WHERE id=?").bind(String(parsedBody.accountId??"")).run();
+      return json({success:true},env);
+    }
+    if(url.pathname === "/api/admin/permissions" && request.method === "POST") {
+      const project=String(parsedBody.projectId??""),capability=String(parsedBody.capability??"");
+      if(!project || !["git","deploy","sandbox","qa"].includes(capability)) return json({error:"Неверное разрешение."},env,400);
+      const sql=parsedBody.enabled===true?"INSERT OR IGNORE INTO project_permissions(project_id,capability) VALUES(?,?)":"DELETE FROM project_permissions WHERE project_id=? AND capability=?";
+      await env.AZRAIL_D1.prepare(sql).bind(project,capability).run();return json({success:true},env);
+    }
+
     /* Билет на подключение к потоку. Выдаётся по обычному токену в
      * заголовке, живёт минуту и гасится при первом использовании —
      * см. lib/ws-ticket.ts про то, почему постоянному токену не место
      * в строке запроса. */
     if (url.pathname === "/api/stream/ticket" && request.method === "POST") {
-      const issued = await issueTicket(env, "shared");
+      const project=String(parsedBody.projectId??"default");
+      const issued = await issueTicket(env, JSON.stringify({account:principal.id,project}));
       return json({ success: true, ...issued }, env);
     }
 
@@ -299,10 +447,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       }
       const instanceName = url.searchParams.get("projectId") ?? "default";
       const orchestrator = await getAgentByName(env.Orchestrator, instanceName);
-      return orchestrator.fetch(request);
+      const forwarded=new Request(request);
+      forwarded.headers.set("X-Azrail-Account",principal.id);
+      forwarded.headers.set("X-Azrail-Project",instanceName);
+      return orchestrator.fetch(forwarded);
     }
 
     if (url.pathname === "/api/models" && request.method === "GET") {
+      const policy = await readModelPolicy(env);
       // Список для выпадающего меню в интерфейсе. Раньше слаг вводился
       // руками — опечатка выяснялась только при падении задачи.
       // Отдаём ровно то, что нужно для выбора: сам слаг, кто сделал, класс.
@@ -322,7 +474,9 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
             contextWindow: m.contextWindow ?? null,
             // Модель, требующая Gateway, без AI_GATEWAY_ID не заработает —
             // интерфейс должен показать это ДО выбора, а не после ошибки.
-            available: !m.requiresGateway || Boolean(env.AI_GATEWAY_ID),
+            available: !modelBlockReason(m,policy,env),
+            blockedReason: modelBlockReason(m,policy,env),
+            freeAllowlisted: FREE_MODEL_SLUGS.has(m.slug),
           })),
         },
         env,
@@ -332,7 +486,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/api/tools" && request.method === "GET") {
       // Что AZRAIL умеет прямо сейчас. `available` здесь означает «есть
       // рабочий адаптер», а не «запланировано» — см. lib/tool-registry.ts.
-      return json({ success: true, tools: describeTools() }, env);
+      return json({ success: true, tools: describeTools(env) }, env);
     }
 
     if (url.pathname === "/api/chat" && request.method === "POST") {
@@ -391,6 +545,13 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return json({ success: true }, env);
     }
 
+    if(url.pathname === "/api/mission/recover" && request.method === "POST") {
+      const row=await env.AZRAIL_D1.prepare("SELECT project_id,status FROM missions WHERE id=?").bind(String(parsedBody.missionId??"")).first<{project_id:string;status:string}>();
+      if(!row) return json({error:"Миссия не найдена."},env,404);
+      if(row.status==="completed") return json({error:"Миссия уже завершена."},env,409);
+      const agent=await getAgentByName(env.Orchestrator,row.project_id);
+      return json(await agent.recoverMission(String(parsedBody.missionId)),env);
+    }
     if (url.pathname === "/api/mission" && request.method === "POST") {
       // Автономный режим: AZRAIL сам решает, какие инструменты звать.
       // Отличается от /api/task тем, что там один агент делает один проход,
@@ -444,20 +605,6 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
        * от самого клиента — раньше каждый из этих случаев стоил ещё
        * одного полного прогона моделей, и заметить это можно было только
        * по счёту. Ключ необязателен: без него поведение прежнее. */
-      const idemScope = "mission";
-      const idempotencyKey = idemKey(request);
-      if (idempotencyKey) {
-        const seen = await idemLookup(env, idemScope, idempotencyKey);
-        if (seen) {
-          log("info", "mission.idempotent_hit", { missionId: seen.missionId });
-          return json(
-            { success: true, missionId: seen.missionId, status: "accepted", deduplicated: true },
-            env,
-            200,
-          );
-        }
-      }
-
       const missionId = crypto.randomUUID();
       const maxIterations = clampIterations(body.maxIterations);
 
@@ -465,11 +612,9 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       // missions миссию нечем отслеживать и не к чему привязать события.
       // Отказ ДО работы дешевле, чем осиротевший прогон, потративший модели.
       try {
-        await env.AZRAIL_D1.prepare(
-          `INSERT INTO missions (id, project_id, goal, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-          .bind(missionId, body.projectId, goal, "queued", new Date().toISOString(), new Date().toISOString())
-          .run();
+        if (!await createMission(env, missionId, body.projectId, goal, {maxIterations,preferredModel:body.preferredModel,publicHostname:url.hostname})) {
+          return json({error:"В проекте уже выполняется миссия. Дождитесь завершения или отмените её.", code:"project_busy"},env,409);
+        }
       } catch (err) {
         log("error", "mission.create_failed", {
           missionId,
@@ -520,16 +665,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         // ПРЯМО СЕЙЧАС, и честнее закрыть её сразу.
         const message = err instanceof Error ? err.message : String(err);
         log("error", "mission.schedule_failed", { missionId, error: message });
-        await finishMission(env, missionId, "failed", {
-          status: "failed",
-          agent: "orchestrator",
-          summary: "Не удалось поставить миссию в работу.",
-          error: message,
-        });
-        return json({ error: "Не удалось запустить миссию.", missionId }, env, 500);
+        return json({success:true,missionId,status:"accepted",deliveryPending:true},env,202);
       }
 
-      if (idempotencyKey) await idemRemember(env, idemScope, idempotencyKey, missionId);
+      // The fetch admission boundary persists the accepted response before returning.
 
       // Бюджет и остаток уходят в ответ: интерфейс предупреждает о
       // приближении к потолку заранее, а не сообщает об упоре постфактум.
@@ -730,6 +869,13 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         );
       }
 
+      const plannedCases = benchBody.only?.length ? SEED_CASES.filter(c => benchBody.only!.includes(c.id)) : SEED_CASES;
+      const estimatedCalls = plannedCases.reduce((sum, c) => sum + c.maxIterations, 0);
+      if (!plannedCases.length) return json({ error: "Нет выбранных тестов." }, env, 400);
+      const quota = await checkRateLimit(env, "shared", estimatedCalls);
+      if (!quota.allowed) return json({ error: "Недостаточно часового лимита для benchmark." }, env, 429);
+      const writes = await chargeWrites(env, plannedCases.reduce((sum, c) => sum + estimateMissionWrites(c.maxIterations), 0));
+      if (!writes.allowed) return json({ error: "Недостаточно бюджета записей для benchmark." }, env, 429);
       const runId = crypto.randomUUID().slice(0, 8);
       const startedAt = new Date().toISOString();
       const orchestrator = await getAgentByName(env.Orchestrator, `bench-${runId}`);
@@ -740,6 +886,9 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           // Миссия идёт тем же путём, что и обычная, — иначе измерялся бы
           // не тот код, который работает у пользователя.
           runMission: async ({ projectId, goal, maxIterations }) => {
+            // Explicit admin-confirmed benchmark grants only sandbox on its
+            // isolated generated project; Git/deploy stay denied.
+            await env.AZRAIL_D1.prepare("INSERT OR IGNORE INTO project_permissions(project_id,capability) VALUES(?,'sandbox')").bind(projectId).run();
             const missionId = crypto.randomUUID();
             await env.AZRAIL_D1.prepare(
               `INSERT INTO missions (id, project_id, goal, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)`,
@@ -786,8 +935,9 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
                 (SELECT content FROM messages m WHERE m.conversation_id = c.id AND m.role = 'user'
                  ORDER BY m.created_at ASC LIMIT 1) AS preview,
                 (SELECT COUNT(*) FROM messages m2 WHERE m2.conversation_id = c.id) AS message_count
-         FROM conversations c ORDER BY c.created_at DESC LIMIT 50`,
-      ).all();
+         FROM conversations c WHERE ? = 'admin' OR EXISTS(SELECT 1 FROM resource_owners o WHERE o.kind='conversation' AND o.resource_id=c.id AND o.account_id=?)
+         ORDER BY c.created_at DESC LIMIT 50`,
+      ).bind(principal.role,principal.id).all();
       return json({ success: true, conversations: results }, env);
     }
 
@@ -816,7 +966,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
             { role: "user", content: draft },
           ],
         },
-        { preferredModel: body.preferredModel },
+        { preferredModel: body.preferredModel, ledger: new UsageLedger(`account:${principal.id}`) },
       );
       return json({ success: true, original: draft, polished: extractText(routed.output) || draft }, env);
     }
@@ -834,7 +984,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     }
 
     if (url.pathname === "/api/upload" && request.method === "POST") {
-      const result = await handleUpload(request, env);
+      const result = await handleUpload(request, env, principal);
       if ("error" in result) return json({ error: result.error }, env, result.status);
       return json({ success: true, ...result }, env);
     }
@@ -930,7 +1080,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       const category = decodeURIComponent(parts[5]) as MemoryCategory;
       const key = decodeURIComponent(parts[6]);
       try {
-        await forgetFact(env, projectId, category, key);
+        await withProjectLock(env,projectId,crypto.randomUUID(),()=>forgetFact(env, projectId, category, key));
         log("info", "memory.forgotten", { projectId, category, key });
         return json({ success: true, forgotten: { category, key } }, env);
       } catch (err) {
@@ -1001,8 +1151,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
     // Маршрутизация напрямую к агентам (WebSocket/RPC от клиента) — на будущее,
     // для панели управления AZRAIL.
-    const agentResponse = await routeAgentRequest(request, env, { cors: true });
-    if (agentResponse) return agentResponse;
+    // Direct SDK routing deliberately disabled: application routes own authorization.
 
     /* Неизвестный путь отдаёт ПРИЛОЖЕНИЕ, а не голую строку.
      *
@@ -1024,7 +1173,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           // клиентской навигации она валидный ответ на любой её путь.
           return new Response(page.body, {
             status: 200,
-            headers: getCors(env, { "Content-Type": "text/html; charset=utf-8" }),
+            headers: getCors(env, page.headers),
           });
         }
       } catch (err) {
@@ -1039,5 +1188,5 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return json({ error: `Неизвестный путь: ${url.pathname}` }, env, 404);
     }
 
-    return new Response("AZRAIL OS — Core API Running", { headers: getCors(env) });
+    return json({error:"Маршрут или метод не найден.",code:"not_found"},env,404);
 }

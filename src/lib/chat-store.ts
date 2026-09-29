@@ -15,9 +15,13 @@ export async function addMessage(env: Env, conversationId: string, role: string,
 }
 
 export async function listMessages(env: Env, conversationId: string, limit = 80) {
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 80;
   const { results } = await env.AZRAIL_D1.prepare(
-    `SELECT id, role, content, parent_message_id, model, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT ?`
-  ).bind(conversationId, limit).all();
+    `SELECT id, role, content, parent_message_id, model, created_at FROM (
+       SELECT rowid AS seq, id, role, content, parent_message_id, model, created_at
+       FROM messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?
+     ) ORDER BY created_at ASC, seq ASC`
+  ).bind(conversationId, safeLimit).all();
   return results;
 }
 

@@ -681,21 +681,12 @@ describe("Новое: история версий — контракт и гра
 });
 
 describe("Регрессия: четвёртый аудит — тихий отказ лимита", () => {
-  // checkRateLimit возвращает allowed:true при недоступном KV (осознанно,
-  // fail-open — иначе инфраструктурный сбой блокировал бы всю работу).
-  // Комментарий утверждал, что вызывающий код это залогирует. Неправда:
-  // index.ts логирует только rl.allowed === false, а этот путь ВСЕГДА
-  // allowed:true — вызывающий код эту ветку никогда не видит. Лимит долгое
-  // время мог бы быть фактически отключён без единой строки в логах.
-  const auth = src("src/lib/auth.ts");
-
-  it("checkRateLimit логирует недоступность KV сам, а не полагается на вызывающего", () => {
-    expect(auth).toMatch(/import \{[^}]*\blog\b[^}]*\} from "\.\/resilience"/);
-    expect(auth).toContain('log("error", "ratelimit.kv_unavailable"');
+  const quota = src("src/lib/quota.ts");
+  it("сбой атомарного резервирования логируется", () => {
+    expect(quota).toContain('log("error", "quota.unavailable"');
   });
-
-  it("сбой инкремента счётчика тоже не молчит", () => {
-    expect(auth).toContain('log("warn", "ratelimit.kv_increment_failed"');
+  it("при сбое операция запрещается", () => {
+    expect(quota.slice(quota.indexOf("} catch (err)"))).toContain("allowed: false");
   });
 });
 
@@ -794,16 +785,10 @@ describe("Новое: живой стрим задач + чат по WebSocket",
   // весь остальной набор: живой Durable Object здесь не поднять, поэтому
   // проверяется код, а не рантайм-поведение сокета.
 
-  it("checkAuth принимает токен из query-параметра, когда заголовка нет — для WS-хендшейка браузер не даёт выставить заголовок", () => {
+  it("постоянный токен не читается из URL", () => {
     const authSrc = src("src/lib/auth.ts");
-    expect(authSrc).toContain('url.searchParams.get("token")');
-    // Запасной путь — только если заголовка НЕТ, а не всегда: иначе у
-    // токена в URL появился бы приоритет над явным заголовком.
-    const checkAuthBody = authSrc.slice(authSrc.indexOf("export function checkAuth"));
-    const headerIdx = checkAuthBody.indexOf('header.startsWith("Bearer ")');
-    const fallbackIdx = checkAuthBody.indexOf("if (!token)");
-    expect(headerIdx).toBeGreaterThan(-1);
-    expect(fallbackIdx).toBeGreaterThan(headerIdx);
+    expect(authSrc).not.toContain('searchParams.get("token")');
+    expect(authSrc).toContain('header.startsWith("Bearer ")');
   });
 
   it("сравнение токена (safeEqual) одно и то же для обоих каналов — не два независимых пути проверки", () => {
@@ -831,7 +816,7 @@ describe("Новое: живой стрим задач + чат по WebSocket",
   it("recordHistory рассылает событие ДО записи в D1 и не роняет её, если рассылка упадёт", () => {
     const orch = src("src/agents/orchestrator.ts");
     const fn = orch.slice(orch.indexOf("private async recordHistory"));
-    const broadcastIdx = fn.indexOf("this.broadcast(");
+    const broadcastIdx = fn.indexOf("sendProjectEvent(");
     const d1Idx = fn.indexOf("this.env.AZRAIL_D1.prepare");
     expect(broadcastIdx).toBeGreaterThan(-1);
     expect(d1Idx).toBeGreaterThan(broadcastIdx);
@@ -854,7 +839,7 @@ describe("Новое: живой стрим задач + чат по WebSocket",
 
   it("чат сохраняет и user-, и assistant-сообщение — не только исходящий ответ", () => {
     const orch = src("src/agents/orchestrator.ts");
-    const onMessageBody = orch.slice(orch.indexOf("async onMessage("), orch.indexOf("connection.send("));
+    const onMessageBody = orch.slice(orch.indexOf("async onMessage("), orch.indexOf("async selfTest("));
     expect(onMessageBody).toContain('addMessage(this.env, convId, "user"');
     expect(onMessageBody).toContain('addMessage(this.env, convId, "assistant"');
   });
@@ -968,7 +953,7 @@ describe("Новое: кнопки интерфейса", () => {
 
   it("недоступные без Gateway модели помечены, а не показаны как рабочие", () => {
     const idx = src("src/index.ts");
-    expect(idx).toContain("available: !m.requiresGateway || Boolean(env.AI_GATEWAY_ID)");
+    expect(idx).toContain("available: !modelBlockReason(m,policy,env)");
     expect(html).toContain("o.disabled = true");
   });
 
@@ -1056,9 +1041,9 @@ describe("Реестр инструментов не врёт о доступн�
   it("цикл выполнения реален: модель решает, движок исполняет, результат возвращается", () => {
     // Раньше runMission всегда возвращал needs_input — цикла не было вовсе.
     // Теперь он есть, и тест сторожит его наличие, а не отсутствие.
-    expect(engineSrc).toContain("for (let i = 0; i < maxIterations; i++)");
+    expect(engineSrc).toContain("for (let i = checkpoints.length");
     expect(engineSrc).toContain("this.decideNextStep(");
-    expect(engineSrc).toContain("await this.executeTool(");
+    expect(engineSrc).toContain("await checkpointTool(");
     expect(engineSrc, "результат шага должен возвращаться модели").toContain("history.push(");
   });
 
@@ -1123,7 +1108,7 @@ describe("Ключи загрузок не сталкиваются", () => {
   it("projectId в пути проверяется по белому списку символов", () => {
     // Он попадает прямо в ключ R2 — произвольная строка дала бы обход
     // по каталогам через "../".
-    expect(upload).toContain("/^[A-Za-z0-9_-]{1,80}$/.test(projectId)");
+    expect(upload).toContain("/^[A-Za-z0-9_-]{1,128}$/.test(projectId)");
     expect(upload).toContain('"inbox"');
   });
 
@@ -1544,7 +1529,7 @@ describe("Лимит покрывает всё, что жжёт модель", (
 
   it("проверяется полная стоимость до списания", () => {
     // used >= limit пропускал бы миссию ценой 8 при одном свободном месте.
-    expect(auth).toContain("used + cost > limit");
+    expect(src("src/lib/quota.ts")).toContain("WHERE used + excluded.used <= ?");
     expect(auth, "старая проверка вернулась").not.toMatch(/if \(used >= limit\)/);
   });
 
@@ -1564,7 +1549,7 @@ describe("Документы не отстают от кода", () => {
   const idx = src("src/index.ts");
 
   it("каждый маршрут кода описан в README", () => {
-    const routes = [...new Set([...idx.matchAll(/pathname === "(\/api\/[a-z]+)"/g)].map((m) => m[1]))];
+    const routes = [...new Set([...idx.matchAll(/pathname === "(\/api\/[a-z]+)(?:\/[^"]*)?"/g)].map((m) => m[1]))];
     expect(routes.length).toBeGreaterThan(8);
     const undocumented = routes.filter((r) => !readme.includes(r));
     expect(undocumented, `нет в README: ${undocumented.join(", ")}`).toEqual([]);
@@ -1721,7 +1706,7 @@ describe("Документы не обещают несуществующего"
 
   it("каждый упомянутый /api/* существует в коде", () => {
     const real = new Set([
-      ...[...idx.matchAll(/pathname === "(\/api\/[a-z]+)"/g)].map((m) => m[1]),
+      ...[...idx.matchAll(/pathname === "(\/api\/[a-z]+)(?:\/[^"]*)?"/g)].map((m) => m[1]),
       ...[...idx.matchAll(/startsWith\("(\/api\/[a-z]+)/g)].map((m) => m[1]),
     ]);
     const bad: string[] = [];
@@ -1913,8 +1898,8 @@ describe("Проверка перед «готово» и план миссии"
     // первая версия теста цеплялась за её объявление в начале цикла и
     // падала на верном коде.
     const successBlock = engine.slice(
-      engine.indexOf("const output = await this.executeTool"),
-      engine.indexOf("} catch (err) {", engine.indexOf("const output = await this.executeTool")),
+      engine.indexOf("const output = await checkpointTool"),
+      engine.indexOf("} catch (err) {", engine.indexOf("const output = await checkpointTool")),
     );
     expect(successBlock, "план должен двигаться после успеха").toContain("advancePlan");
 
@@ -1969,14 +1954,13 @@ describe("Защита от неконтролируемого счёта", () =
   });
 
   it("проверяется полная стоимость, а не наличие одного места", () => {
-    expect(budget).toContain("used + cost > limit");
+    expect(src("src/lib/quota.ts")).toContain("WHERE used + excluded.used <= ?");
   });
 
   it("недоступность KV логируется как ошибка, а не проглатывается", () => {
     // Молчаливое отключение защиты от расходов — худший из отказов.
-    expect(budget).toContain("budget.kv_read_failed");
-    const fn = budget.slice(budget.indexOf("export async function chargeWrites"));
-    expect(fn).toContain('log("error"');
+    expect(budget).toContain("reserveQuota");
+    expect(src("src/lib/quota.ts")).toContain('log("error", "quota.unavailable"');
   });
 
   it("будильников в Durable Objects нет", () => {
@@ -2224,7 +2208,7 @@ describe("Защита миссии: снимок, откат, зациклив�
 
   it("зацикливание проверяется ДО исполнения инструмента", () => {
     const loopIdx = engine.indexOf("detectLoop(");
-    const execIdx = engine.indexOf("await this.executeTool(known.name");
+    const execIdx = engine.indexOf("await checkpointTool(this.env");
     expect(loopIdx).toBeGreaterThan(-1);
     expect(loopIdx, "проверка должна идти до вызова").toBeLessThan(execIdx);
   });
@@ -2243,7 +2227,7 @@ describe("Защита миссии: снимок, откат, зациклив�
 
   it("снимок делается ДО первого шага", () => {
     const snapIdx = engine.indexOf("snapshotWorkspace(");
-    const loopIdx = engine.indexOf("for (let i = 0; i < maxIterations");
+    const loopIdx = engine.indexOf("for (let i = checkpoints.length");
     expect(snapIdx).toBeGreaterThan(-1);
     expect(snapIdx, "снимок после начала работы бесполезен").toBeLessThan(loopIdx);
   });
@@ -2261,15 +2245,15 @@ describe("Защита миссии: снимок, откат, зациклив�
     // него после этого указывала бы на изменённые данные — то есть
     // снимок не был бы снимком.
     const fn = guard.slice(guard.indexOf("export async function snapshotWorkspace"));
-    expect(fn.slice(0, 2000)).toContain("await body.text()");
+    expect(fn.slice(0, 2000)).toContain("await body.arrayBuffer()");
   });
 
-  it("откат удаляет файлы, появившиеся за миссию", () => {
+  it("откат переключает активный набор файлов", () => {
     // Иначе откат неполон: остались бы половинчатые новые файлы, на
     // которые ничего не ссылается.
     const fn = guard.slice(guard.indexOf("export async function rollbackWorkspace"));
-    expect(fn.slice(0, 2000)).toContain("AZRAIL_R2.delete");
-    expect(fn.slice(0, 2000)).toContain("!wanted.has(rel)");
+    expect(fn.slice(0, 2000)).toContain("publishWorkspace");
+    expect(fn.slice(0, 2000)).toContain("!wanted.has(logicalWorkspacePath(prefix,obj.key.slice(prefix.length)))");
   });
 
   it("откат вызывается при непройденной проверке", () => {
@@ -2290,7 +2274,7 @@ describe("Защита миссии: снимок, откат, зациклив�
 
   it("замер тестов делается до первого шага", () => {
     const baseIdx = engine.indexOf("tests.baseline");
-    const loopIdx = engine.indexOf("for (let i = 0; i < maxIterations");
+    const loopIdx = engine.indexOf("for (let i = checkpoints.length");
     expect(baseIdx).toBeGreaterThan(-1);
     expect(baseIdx).toBeLessThan(loopIdx);
   });
@@ -2384,7 +2368,7 @@ describe("Данные не копятся впустую", () => {
   // инструментов, вердикты проверок и заблокированные запросы. Это ровно
   // те данные, которых не хватало для трассировки прогона — и они уже
   // собирались.
-  const files = ["src/index.ts", "src/agents/orchestrator.ts", "src/core/execution-engine.ts", "src/lib/event-store.ts", "src/lib/chat-store.ts", "src/lib/memory-agent.ts", "src/lib/versions.ts"];
+  const files = ["src/index.ts", "src/agents/orchestrator.ts", "src/core/execution-engine.ts", "src/lib/billing.ts", "src/lib/event-store.ts", "src/lib/chat-store.ts", "src/lib/memory-agent.ts", "src/lib/versions.ts"];
   const all = files.map((f) => src(f)).join("\n");
 
   it("у каждой таблицы, в которую пишут, есть чтение", () => {
@@ -2442,10 +2426,10 @@ describe("Нет эндпоинтов без пути к ним", () => {
   // покрытые тестами и не вызываемые ни одной страницей.
   const idx = src("src/index.ts");
   const html = src("public/index.html");
-  const classic = src("public/classic.html");
+  const classic = src("public/classic.html") + src("public/control.js");
 
   it("каждый API-маршрут вызывается хотя бы одной страницей", () => {
-    const routes = [...new Set([...idx.matchAll(/pathname === "(\/api\/[a-z]+)"/g)].map((m) => m[1]))];
+    const routes = [...new Set([...idx.matchAll(/pathname === "(\/api\/[a-z]+)(?:\/[^"]*)?"/g)].map((m) => m[1]))];
     expect(routes.length).toBeGreaterThan(8);
     // Ищем ВЫЗОВЫ, а не упоминания. Первая версия проверяла
     // html.includes(route) и проходила на комментарии, где я перечислил
@@ -2459,7 +2443,7 @@ describe("Нет эндпоинтов без пути к ним", () => {
     // версия объявила осиротевшими /api/mission и /api/stream, которые
     // вызываются каждый день.
     const called = (page: string, route: string) => {
-      const quoted = `['"\`]${route.replace(/\//g, "\\/")}(?:[?'"\`])`;
+      const quoted = `['"\`]${route.replace(/\//g, "\\/")}(?:[/?'"\`])`;
       return new RegExp(quoted).test(page);
     };
 
@@ -2579,7 +2563,7 @@ describe("Чат и история: параметры совпадают с с�
   // внутри URL.
   const idx = src("src/index.ts");
   const html = src("public/index.html");
-  const classic = src("public/classic.html");
+  const classic = src("public/classic.html") + src("public/control.js");
   const auth = src("src/lib/auth.ts");
   const orch = src("src/agents/orchestrator.ts");
   const store = src("src/lib/chat-store.ts");
@@ -2772,18 +2756,15 @@ describe("AZRAIL отвечает на вопросы", () => {
 describe("Готовность к деплою контейнера", () => {
   const project = src("src/lib/project.ts");
 
-  it("кеш проектов не помнит вечно", () => {
-    // Без срока жизни кеш утверждает «проект есть» до выгрузки объекта.
-    // Удалят строку из D1 — записи полетят в несуществующий внешний ключ
-    // и будут падать часами, пока объект не выгрузят.
-    expect(project).toContain("CACHE_TTL_MS");
-    expect(project, "Set не хранит время — нужен Map").toContain("new Map<string, number>()");
-    expect(project).toContain("Date.now() - cachedAt < CACHE_TTL_MS");
+  it("существование проекта не кешируется вне D1", () => {
+    expect(project).not.toContain("new Map");
+    expect(project).not.toContain("systemUserReady");
+    expect(project).toContain("env.AZRAIL_D1.batch");
   });
-
-  it("неудачная запись не оставляет отметку об успехе", () => {
-    const fail = project.slice(Math.max(0, project.indexOf("project.ensure_failed") - 300));
-    expect(fail.slice(0, 400)).toContain("known.delete(projectId)");
+  it("ошибка сохранения не объявляет проект созданным", () => {
+    const fail=project.slice(project.indexOf("catch (err)"));
+    expect(fail).toContain("return false");
+    expect(fail).not.toContain("return true");
   });
 
   it("простой контейнера объявлен, а не унаследован", () => {

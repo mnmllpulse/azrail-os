@@ -1,3 +1,4 @@
+import { sqliteD1 } from "./stubs/sqlite-d1";
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -41,59 +42,11 @@ interface Row {
 }
 
 function fakeD1(rows: Row[], opts: { failOnResultColumn?: boolean } = {}) {
-  const log: string[] = [];
-  const db = {
-    rows,
-    log,
-    prepare(sql: string) {
-      const stmt = {
-        args: [] as unknown[],
-        bind(...args: unknown[]) {
-          stmt.args = args;
-          return stmt;
-        },
-        async first<T>() {
-          log.push(sql);
-          if (/SELECT status FROM missions/.test(sql)) {
-            const found = rows.find((r) => r.id === stmt.args[0]);
-            return (found ? { status: found.status } : null) as T | null;
-          }
-          return null as T | null;
-        },
-        async all<T>() {
-          log.push(sql);
-          if (/SELECT id FROM missions/.test(sql)) {
-            const cutoff = String(stmt.args[0]);
-            const active = ["queued", "executing", "cancelling"];
-            return {
-              results: rows
-                .filter((r) => active.includes(r.status) && (r.updated_at ?? r.created_at ?? "") < cutoff)
-                .map((r) => ({ id: r.id })) as T[],
-            };
-          }
-          return { results: [] as T[] };
-        },
-        async run() {
-          log.push(sql);
-          if (opts.failOnResultColumn && sql.includes("result_json")) {
-            throw new Error("no such column: result_json");
-          }
-          if (/UPDATE missions SET status/.test(sql)) {
-            const id = stmt.args[stmt.args.length - 1];
-            const target = rows.find((r) => r.id === id);
-            // Статус приходит двумя способами: параметром (finishMission)
-            // и литералом прямо в SQL (requestCancel). Учитывать только
-            // первый — значит проверять половину путей.
-            const literal = /SET status = '([^']+)'/.exec(sql);
-            if (target) target.status = literal ? literal[1] : String(stmt.args[0]);
-          }
-          return { success: true };
-        },
-      };
-      return stmt;
-    },
-  };
-  return db;
+  const {db,sqlite}=sqliteD1();
+  for(const row of rows)sqlite.prepare("INSERT INTO missions(id,goal,status,created_at,updated_at) VALUES(?,'test',?,?,?)")
+    .run(row.id,row.status,row.created_at??new Date().toISOString(),row.updated_at??row.created_at??new Date().toISOString());
+  if(opts.failOnResultColumn)sqlite.exec("ALTER TABLE missions DROP COLUMN result_json");
+  return {prepare:db.prepare.bind(db),get rows(){return sqlite.prepare("SELECT * FROM missions").all() as unknown as Row[];}};
 }
 
 function fakeKV(opts: { broken?: boolean } = {}) {
@@ -195,15 +148,15 @@ describe("Остановка миссии", () => {
   it("цикл спрашивает про остановку ПЕРЕД вызовом модели", () => {
     // Иначе отмена оплачивала бы ещё один вызов ради права остановиться.
     const engine = src("src/core/execution-engine.ts");
-    const loop = engine.slice(engine.indexOf("for (let i = 0; i < maxIterations; i++)"));
+    const loop = engine.slice(engine.indexOf("for (let i = checkpoints.length"));
     const abortAt = loop.indexOf("ctx.shouldAbort");
     const decideAt = loop.indexOf("this.decideNextStep(");
     expect(abortAt).toBeGreaterThan(-1);
     expect(abortAt, "проверка останова должна быть до решения шага").toBeLessThan(decideAt);
   });
 
-  it("недоступная база не считается командой «стоп»", async () => {
-    // Прерывать начатую работу из-за сбоя чтения нельзя: это не команда.
+  it("недоступная база не разрешает продолжать выполнение", async () => {
+    // Ошибка чтения должна остановить новые вызовы, сохранив причину сбоя.
     const env = envWith({
       AZRAIL_D1: {
         prepare() {
@@ -211,7 +164,7 @@ describe("Остановка миссии", () => {
         },
       } as unknown as D1Database,
     });
-    expect(await isCancelRequested(env, "m1")).toBe(false);
+    await expect(isCancelRequested(env, "m1")).rejects.toThrow("D1 упал");
   });
 });
 
@@ -310,7 +263,7 @@ describe("Билет для WebSocket", () => {
     // Иначе это просто токен покороче: подсмотренный в логах билет
     // работал бы столько же, сколько живёт.
     const kv = fakeKV();
-    const env = envWith({ AZRAIL_KV: kv as unknown as KVNamespace });
+    const env = envWith({ AZRAIL_KV: kv as unknown as KVNamespace, AZRAIL_D1: sqliteD1().db });
     const { ticket, expiresIn } = await issueTicket(env, "shared");
     expect(expiresIn).toBe(TICKET_TTL_SECONDS);
     expect(await redeemTicket(env, ticket)).toBe("shared");
@@ -343,8 +296,8 @@ describe("Лимит расхода закрывается при сбое, а �
     expect(res.allowed).toBe(false);
   });
 
-  it("исправный KV считает как считал", async () => {
-    const env = envWith({ AZRAIL_KV: fakeKV() as unknown as KVNamespace, AZRAIL_HOURLY_LIMIT: "3" });
+  it("атомарный D1 учитывает полную стоимость", async () => {
+    const env = envWith({ AZRAIL_KV: fakeKV() as unknown as KVNamespace, AZRAIL_D1: sqliteD1().db, AZRAIL_HOURLY_LIMIT: "3" });
     expect((await checkRateLimit(env, "u", 1)).allowed).toBe(true);
     expect((await checkRateLimit(env, "u", 1)).allowed).toBe(true);
     // Полная стоимость проверяется ДО списания: задача ценой 2 при одном

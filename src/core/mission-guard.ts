@@ -1,3 +1,4 @@
+import { workspacePrefix, publishWorkspace, logicalWorkspacePath, workspacePath } from "../lib/workspace-head";
 import type { Env } from "../types";
 import { log } from "../lib/resilience";
 
@@ -107,6 +108,25 @@ export interface Snapshot {
   files: number;
 }
 
+/** Read all pages before changing anything; never treat a partial listing as complete. */
+async function listSnapshotObjects(env: Env, prefix: string) {
+  const objects: Array<{ key: string; size: number }> = [];
+  let cursor: string | undefined;
+  const seen = new Set<string>();
+  let bytes = 0;
+  do {
+    const page = await env.AZRAIL_R2.list({ prefix, limit: 300, cursor });
+    objects.push(...page.objects);
+    bytes += page.objects.reduce((n, o) => n + o.size, 0);
+    if (objects.length > 1000 || bytes > 16 * 1024 * 1024) throw new Error("Snapshot budget exceeded (1000 files / 16 MiB)");
+    if (!page.truncated) break;
+    if (!page.cursor || seen.has(page.cursor)) throw new Error("Incomplete R2 listing");
+    seen.add(page.cursor);
+    cursor = page.cursor;
+  } while (true);
+  return { objects };
+}
+
 /**
  * Снять состояние рабочей области перед миссией.
  *
@@ -121,20 +141,20 @@ export async function snapshotWorkspace(
   note: string,
 ): Promise<Snapshot | null> {
   try {
-    const prefix = `projects/${projectId}/workspace/`;
-    const listed = await env.AZRAIL_R2.list({ prefix, limit: 300 });
+    const prefix = await workspacePrefix(env,projectId);
+    const listed = await listSnapshotObjects(env, prefix);
     if (!listed.objects.length) return null;
 
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const key = `projects/${projectId}/snapshots/${stamp}/`;
+    const key = `projects/${projectId}/snapshots-v2/${stamp}-${crypto.randomUUID()}/`;
 
     // Копируем содержимое, а не ссылку: объект в рабочей области будет
     // перезаписан миссией, и ссылка на него после этого указывала бы на
     // уже изменённые данные — то есть снимок не был бы снимком.
     for (const obj of listed.objects) {
       const body = await env.AZRAIL_R2.get(obj.key);
-      if (!body) continue;
-      await env.AZRAIL_R2.put(key + obj.key.slice(prefix.length), await body.text());
+      if (!body) throw new Error("Snapshot source disappeared");
+      await env.AZRAIL_R2.put(key + logicalWorkspacePath(prefix, obj.key.slice(prefix.length)), new Uint8Array(await body.arrayBuffer()));
     }
 
     const versionId = crypto.randomUUID();
@@ -172,31 +192,25 @@ export async function rollbackWorkspace(
   snapshotKey: string,
 ): Promise<{ restored: number; removed: number } | null> {
   try {
-    const prefix = `projects/${projectId}/workspace/`;
+    const prefix = await workspacePrefix(env,projectId);
 
-    const snap = await env.AZRAIL_R2.list({ prefix: snapshotKey, limit: 300 });
-    const wanted = new Map<string, string>();
+    if (!(snapshotKey.startsWith(`projects/${projectId}/snapshots/`) || snapshotKey.startsWith(`projects/${projectId}/snapshots-v2/`)) || !snapshotKey.endsWith("/")) throw new Error("Invalid snapshot scope");
+    const snap = await listSnapshotObjects(env, snapshotKey);
+    if (!snap.objects.length) throw new Error("Empty or missing snapshot; rollback refused");
+    const wanted = new Map<string, Uint8Array>();
     for (const obj of snap.objects) {
       const body = await env.AZRAIL_R2.get(obj.key);
-      if (body) wanted.set(obj.key.slice(snapshotKey.length), await body.text());
+      if (!body) throw new Error("Snapshot object missing; rollback refused");
+      const path = workspacePath(obj.key.slice(snapshotKey.length));
+      if(snapshotKey.includes("/snapshots/") && /%[0-9a-f]{2}/i.test(path))
+        throw new Error("Legacy snapshot has ambiguous path encoding; review before restoring");
+      wanted.set(path, new Uint8Array(await body.arrayBuffer()));
     }
 
-    const current = await env.AZRAIL_R2.list({ prefix, limit: 300 });
-    let removed = 0;
-    for (const obj of current.objects) {
-      const rel = obj.key.slice(prefix.length);
-      if (!wanted.has(rel)) {
-        await env.AZRAIL_R2.delete(obj.key);
-        removed++;
-      }
-    }
-
-    let restored = 0;
-    for (const [rel, content] of wanted) {
-      await env.AZRAIL_R2.put(prefix + rel, content);
-      restored++;
-    }
-
+    const current = await listSnapshotObjects(env, prefix);
+    const removed=current.objects.filter(obj=>!wanted.has(logicalWorkspacePath(prefix,obj.key.slice(prefix.length)))).length;
+    await publishWorkspace(env,projectId,[...wanted].map(([path,content])=>({path,content})));
+    const restored=wanted.size;
     return { restored, removed };
   } catch (err) {
     log("error", "rollback.failed", {

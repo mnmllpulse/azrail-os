@@ -1,3 +1,5 @@
+> Актуальный пакет 0.8.1: начните с [START_HERE_RU.md](START_HERE_RU.md). Документ ниже содержит историческое описание проекта.
+
 # AZRAIL OS — MVP
 
 Автономная система разработки на Cloudflare (Workers + Agents SDK + D1 + KV + R2 + Workers AI).
@@ -1312,3 +1314,9 @@ Security/QA/UI/Database/Architect агенты, Cloudflare Workflows для
 делает подключённый GitHub CI). Docker-артефакты из раздела 8 системного
 промпта не создавал — деплой идёт в Cloudflare Workers, контейнеров нет,
 Dockerfile/docker-compose тут не имеют смысла.
+
+## Version 0.7.0 API additions
+
+`/api/me` returns the authenticated account. `/api/metrics?projectId=...` reports measured mission and model usage, including unknown prices. `/api/backups` creates or lists integrity-checked workspace backups; `/api/backups/restore` publishes a copy into a new empty project. `/api/mission/recover` resumes completed checkpoints and refuses uncertain effects.
+
+Administrative APIs: `/api/admin/accounts`, `/api/admin/accounts/revoke`, `/api/admin/permissions`, `/api/admin/ownership`, `/api/admin/billing`. The interface is `/control.html`. Apply migration 005 after 002, 003 and 004 as appropriate for the existing schema. Accounts use expiring, revocable random bearer credentials stored as SHA-256 hashes; this is not password/OIDC login. Metering defaults to observe; enforce requires explicit model tariffs and budgets. Workspace restoration switches a D1 pointer only after all staged R2 objects have been written.

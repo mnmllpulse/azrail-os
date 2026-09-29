@@ -2,6 +2,10 @@
 import type { Orchestrator } from "./agents/orchestrator";
 
 export interface Env {
+  AZRAIL_FORCE_FREE?: string;
+  AZRAIL_WORKERS_PLAN?: "free" | "paid";
+  AZRAIL_METERING?: "observe" | "enforce";
+  AZRAIL_MISSION_BUDGET_USD?: string;
   AZRAIL_D1: D1Database;
   AZRAIL_KV: KVNamespace;
   AZRAIL_R2: R2Bucket;
@@ -143,6 +147,8 @@ export interface MissionEvent {
 }
 
 export interface TaskRequest {
+  /** Internal RPC field. HTTP/WS input never chooses the effective scope. */
+  _billingScope?: string;
   /** Последние реплики диалога — чтобы уточняющий вопрос не терял предмет. */
   conversationHistory?: Array<{ role: string; content: string }>;
   projectId?: string;

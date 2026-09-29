@@ -1,3 +1,4 @@
+import { withBillingScope, projectBillingScope } from "../lib/billing-context";
 import { Agent } from "agents";
 import type { Env, AnswerAgentState, TaskRequest, TaskResult } from "../types";
 import { runModel, extractText } from "../lib/model-router";
@@ -70,6 +71,10 @@ export class AnswerAgent extends Agent<Env, AnswerAgentState> {
   }
 
   async run(request: TaskRequest): Promise<TaskResult> {
+    return withBillingScope(request._billingScope ?? projectBillingScope(request.projectId), () => this.runScoped(request));
+  }
+
+  private async runScoped(request: TaskRequest): Promise<TaskResult> {
     const question = (request.payload ?? "").toString().trim();
 
     if (!question) {

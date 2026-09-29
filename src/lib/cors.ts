@@ -5,7 +5,10 @@ import type { Env } from "../types";
 export function getCors(env: Env, extra?: HeadersInit): Headers {
   const headers = new Headers(extra);
   headers.set("Access-Control-Allow-Origin", env.CORS_ORIGIN || "*");
-  headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key");
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Referrer-Policy", "no-referrer");
+  headers.set("Cache-Control", "no-store");
   return headers;
 }

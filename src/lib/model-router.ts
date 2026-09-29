@@ -1,3 +1,5 @@
+import { currentBillingScope } from "./billing-context";
+import { eligibleRegistry, policyModelCall, ModelPolicyError } from "./model-policy";
 // AZRAIL — выбор модели под задачу.
 //
 // Что этот модуль делает и, что важнее, чего НЕ делает.
@@ -7,9 +9,8 @@
 // цифру, невозможно отладить: когда маршрутизатор выберет не то, причину
 // будет не восстановить.
 //
-// НЕ делает: не собирает статистику по стоимости, задержкам и ошибкам.
-// Это уже делает AI Gateway, причём точнее, чем получилось бы у нас.
-// Дублировать платформу — писать худшую копию и платить за неё временем.
+// Каждый вызов, включая retry, передаётся billing.ts для учёта стоимости.
+// AI Gateway остаётся источником независимой сверки с провайдером.
 //
 // Делает ровно одно, зато то, чего Gateway не умеет: выбирает, КАКУЮ
 // модель звать под конкретную задачу, — и объясняет, почему именно её.
@@ -178,6 +179,8 @@ export function route(
   return { candidates, reasoning };
 }
 
+export class ModelValidationError extends Error {}
+
 export interface ModelRunResult<T> {
   output: T;
   /** Какая модель в итоге ответила */
@@ -267,13 +270,9 @@ export async function runModel<T = unknown>(
       );
     }
 
-    const options = pinned.requiresGateway || env.AI_GATEWAY_ID
-      ? { gateway: { id: env.AI_GATEWAY_ID ?? "default" } }
-      : undefined;
-
     const output = (await withRetry(
-      () => (options ? env.AI.run(pinned.slug, input, options) : env.AI.run(pinned.slug, input)),
-      { label: `model:${pinned.slug}`, attempts: 2, retryable: (err) => !isQuotaError(err) },
+      () => policyModelCall(env,pinned,input,req.ledger?.scope??currentBillingScope()??"global"),
+      { label: `model:${pinned.slug}`, attempts: 2, retryable: (err) => !(err instanceof ModelPolicyError) && !isQuotaError(err) },
     )) as T;
 
     if (req.validate) {
@@ -304,7 +303,8 @@ export async function runModel<T = unknown>(
   // и лишь для тех, кто прошёл отбор. Обратный порядок читал бы KV для
   // каждой модели реестра на каждом вызове: сейчас это шесть чтений, но
   // растёт линейно с каталогом и добавляется к КАЖДОМУ запросу.
-  const preliminary = route(intent, { ...req, gatewayAvailable: !!env.AI_GATEWAY_ID });
+  const registry = await eligibleRegistry(env);
+  const preliminary = route(intent, { ...req, gatewayAvailable: !!env.AI_GATEWAY_ID }, registry);
 
   const unavailable: string[] = [...(req.unavailable ?? [])];
   for (const m of preliminary.candidates) {
@@ -317,7 +317,7 @@ export async function runModel<T = unknown>(
   // в обычном случае второго прохода не будет вовсе.
   let decision =
     unavailable.length > (req.unavailable?.length ?? 0)
-      ? route(intent, { ...req, unavailable, gatewayAvailable: !!env.AI_GATEWAY_ID })
+      ? route(intent, { ...req, unavailable, gatewayAvailable: !!env.AI_GATEWAY_ID }, registry)
       : preliminary;
 
   // Крайний случай: отстранены ВСЕ подходящие модели. Провалить запрос,
@@ -358,13 +358,9 @@ export async function runModel<T = unknown>(
       continue;
     }
 
-    const options = model.requiresGateway || env.AI_GATEWAY_ID
-      ? { gateway: { id: env.AI_GATEWAY_ID ?? "default" } }
-      : undefined;
-
     try {
       const output = (await withRetry(
-        () => (options ? env.AI.run(model.slug, input, options) : env.AI.run(model.slug, input)),
+        () => policyModelCall(env,model,input,req.ledger?.scope??currentBillingScope()??"global"),
         {
           label: `model:${model.slug}`,
           attempts: 2,
@@ -373,7 +369,7 @@ export async function runModel<T = unknown>(
           // модель будет потрачена впустую. Без этого переопределения
           // withRetry считал 429 обычной временной ошибкой и отменял
           // защиту от квоты, построенную здесь же уровнем выше.
-          retryable: (err) => !isQuotaError(err),
+          retryable: (err) => !(err instanceof ModelPolicyError) && !isQuotaError(err),
         },
       )) as T;
 
@@ -421,7 +417,7 @@ export async function runModel<T = unknown>(
           model: model.slug,
           error: validateErr instanceof Error ? validateErr.message : String(validateErr),
         });
-        verdict = true; // ответ принимаем: виноват валидатор, а не модель
+        throw new ModelValidationError("Проверка ответа завершилась ошибкой. Результат не принят.");
       }
       if (verdict !== true) {
         const why = `${model.slug} — ответ отклонён: ${verdict}`;
@@ -455,8 +451,12 @@ export async function runModel<T = unknown>(
 
       return { output, model: model.slug, attempts: i + 1, reasoning: decision.reasoning, usage };
     } catch (err) {
+      if (err instanceof ModelValidationError) throw err;
       const text = err instanceof Error ? err.message : String(err);
       errors.push(`${model.slug}: ${text}`);
+      if (/3036|daily free allocation|10,000 neurons/i.test(text)) {
+        throw new ModelPolicyError("Дневная квота Workers AI исчерпана. Платный обход не запускается.");
+      }
 
       // Исчерпанный лимит отличается от прочих сбоев: повторять эту модель
       // бессмысленно не только сейчас, но и в ближайшие минуты. Запоминаем,

@@ -87,7 +87,7 @@ async function readZip(buf: ArrayBuffer, archiveName: string): Promise<LoadedAtt
     .map((e) => `  ${e.path}  (${e.size >= 1024 ? Math.round(e.size / 1024) + " КБ" : e.size + " Б"})`)
     .join("\n");
 
-  const hiddenNote = total > visible.length ? `\n  …и ${total - visible.length} служебных файлов (node_modules, .git и подобное) — пропущены` : "";
+  const hiddenNote = total > visible.length ? `\n  …и ${total - visible.length} файлов вне показанного перечня (служебные или превышение лимита) — пропущены` : "";
 
   const out: LoadedAttachment[] = [{
     fileName: `${archiveName} — оглавление`,
@@ -106,10 +106,10 @@ async function readZip(buf: ArrayBuffer, archiveName: string): Promise<LoadedAtt
 
   for (const entry of queue) {
     if (read >= ZIP_MAX_READ || budget <= 0) break;
-    if (entry.size > ZIP_MAX_ONE) continue;
+    if (entry.size > Math.min(ZIP_MAX_ONE, budget)) continue;
 
     try {
-      const bytes = await readEntry(buf, entry);
+      const bytes = await readEntry(buf, entry, Math.min(ZIP_MAX_ONE, budget));
       const text = new TextDecoder("utf-8").decode(bytes);
       out.push({ fileName: `${archiveName} → ${entry.path}`, text, bytes: bytes.byteLength });
       budget -= bytes.byteLength;
@@ -174,6 +174,7 @@ export async function loadAttachments(
           out.push({ fileName: name, skipped: "файл не найден в хранилище" });
           continue;
         }
+        if (obj.size > 50 * 1024 * 1024) throw new ZipError("архив превышает 50 МБ");
         out.push(...(await readZip(await obj.arrayBuffer(), name)));
       } catch (err) {
         const why = err instanceof ZipError ? err.message : err instanceof Error ? err.message : String(err);

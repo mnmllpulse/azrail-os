@@ -72,11 +72,9 @@ export class Sandbox extends BaseSandbox<Env> {
 
     if (now - born < SANDBOX_LIMITS.MAX_LIFETIME_MS) return;
 
-    // Контейнер сносится и рождается заново на следующей команде. Отказать
-    // в выполнении было бы хуже: миссия упала бы на ровном месте, хотя
-    // проблема не в ней. Цена — потерянное состояние контейнера, и это
-    // честная цена за предсказуемый счёт.
+    // Stop this command: a freshly destroyed filesystem cannot be treated as the old one.
     await this.destroy();
     await this.ctx.storage.put(BORN_AT, now);
+    throw new Error("Истёк срок песочницы. Команда не выполнена; синхронизируйте файлы перед новым запуском.");
   }
 }

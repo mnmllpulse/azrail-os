@@ -17,7 +17,7 @@
 // «стало ли лучше» можно только прогнав тесты на изменённых файлах.
 
 import type { Env } from "../types";
-import { listFiles, readFile } from "../lib/workspace";
+import { listFilesPage, readFile } from "../lib/workspace";
 import { log } from "../lib/resilience";
 import { getContainer, SANDBOX_LIMITS } from "./sandbox";
 
@@ -67,7 +67,9 @@ export async function syncWorkspaceToSandbox(
   const { getSandbox } = await loadSdk();
   const box = getSandbox(ns, opts?.sandboxName ?? projectId);
 
-  const files = await listFiles(env, projectId, maxFiles);
+  const page = await listFilesPage(env, projectId, maxFiles);
+  if (page.truncated) throw new Error("Синхронизация неполна: превышен лимит файлов.");
+  const files = page.files;
   const skipped: Array<{ path: string; reason: string }> = [];
   let bytes = 0;
   let written = 0;
@@ -78,18 +80,17 @@ export async function syncWorkspaceToSandbox(
     // Потолок на файл — тот же, что у вывода команды: огромный файл в
     // контейнере не нужен никому, а память воркера кончается тихо.
     if (entry.size > SANDBOX_LIMITS.MAX_FILE_BYTES) {
-      skipped.push({ path: entry.path, reason: `больше ${SANDBOX_LIMITS.MAX_FILE_BYTES} байт` });
-      continue;
+      throw new Error(`Файл ${entry.path} превышает лимит синхронизации ${SANDBOX_LIMITS.MAX_FILE_BYTES} байт.`);
     }
     const file = await readFile(env, projectId, entry.path);
     if (!file) {
       // Файл исчез между листингом и чтением — редко, но возможно.
       // Молча пропустить нельзя: это расхождение, о котором надо знать.
-      skipped.push({ path: entry.path, reason: "пропал между листингом и чтением" });
-      continue;
+      throw new Error(`Файл ${entry.path} исчез при синхронизации.`);
     }
     await box.writeFile(`${workdir}/${entry.path}`, file.content);
-    bytes += file.content.length;
+    bytes += new TextEncoder().encode(file.content).byteLength;
+    if (bytes > 16*1024*1024) throw new Error("Синхронизация превышает 16 МиБ.");
     written++;
   }
 

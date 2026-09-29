@@ -1,5 +1,7 @@
+import { requireResource, type Principal } from "./accounts";
 // AZRAIL — загрузка файлов напрямую из чата/дашборда в AZRAIL_R2
 
+import { readBoundedBody, BodyLimitError } from "./request-body";
 import type { Env, InputType } from "../types";
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB — мягкий лимит приложения,
@@ -60,11 +62,13 @@ export interface UploadError {
   status: number;
 }
 
-export async function handleUpload(request: Request, env: Env): Promise<UploadResult | UploadError> {
+export async function handleUpload(request: Request, env: Env, principal?: Principal): Promise<UploadResult | UploadError> {
   let form: FormData;
   try {
-    form = await request.formData();
-  } catch {
+    const bytes = await readBoundedBody(request, MAX_UPLOAD_BYTES + 1024 * 1024);
+    form = await new Response(bytes, { headers: request.headers }).formData();
+  } catch (err) {
+    if (err instanceof BodyLimitError) return { error: err.message, status: 413 };
     return { error: "Ожидался multipart/form-data.", status: 400 };
   }
 
@@ -94,11 +98,13 @@ export async function handleUpload(request: Request, env: Env): Promise<UploadRe
   // и произвольная строка оттуда открыла бы обход по каталогам.
   const projectId = form.get("projectId");
   const safeProject =
-    typeof projectId === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(projectId) ? projectId : "inbox";
+    typeof projectId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(projectId) ? projectId : principal ? `inbox_${principal.id}` : "inbox";
+  if(principal) await requireResource(env,principal,"project",safeProject,true);
   const r2Key = `uploads/${safeProject}/${crypto.randomUUID()}-${sanitizeFilename(uploaded.name)}`;
   await env.AZRAIL_R2.put(r2Key, await uploaded.arrayBuffer(), {
     httpMetadata: { contentType: uploaded.type || "application/octet-stream" },
   });
 
+  if(principal) await env.AZRAIL_D1.prepare("INSERT INTO resource_owners(kind,resource_id,account_id) VALUES('upload',?,?)").bind(r2Key,principal.id).run();
   return { r2Key, inputType, fileName: uploaded.name, size: uploaded.size };
 }

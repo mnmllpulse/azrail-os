@@ -398,8 +398,8 @@ export function tiersFor(policy: RoutePolicy, complexity: Complexity): ModelTier
 }
 
 export const ROUTING_POLICY: Record<string, RoutePolicy> = {
-  // Работа с кодом: нужны инструменты и рассуждение, качество приоритетно.
-  generate_code: { requires: ["coding", "tool_calling"], prefer: QUALITY_FIRST },
+  // Генератор возвращает файлы текстом; native tool calling для этого не требуется.
+  generate_code: { requires: ["coding"], prefer: QUALITY_FIRST },
   review_repo: { requires: ["coding"], prefer: QUALITY_FIRST },
   analyze_spec: { requires: ["reasoning"], prefer: QUALITY_FIRST },
   // Обычный разговор через WebSocket-чат (см. Orchestrator.onMessage) — не

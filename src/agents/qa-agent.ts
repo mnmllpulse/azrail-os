@@ -1,3 +1,4 @@
+import { withBillingScope, projectBillingScope } from "../lib/billing-context";
 import { Agent } from "agents";
 import type { Env, QaAgentState, TaskRequest, TaskResult, QaOperation } from "../types";
 import { readSource } from "../lib/source-reader";
@@ -49,6 +50,10 @@ export class QaAgent extends Agent<Env, QaAgentState> {
   }
 
   async run(request: TaskRequest): Promise<TaskResult> {
+    return withBillingScope(request._billingScope ?? projectBillingScope(request.projectId), () => this.runScoped(request));
+  }
+
+  private async runScoped(request: TaskRequest): Promise<TaskResult> {
     this.setState({ lastRunAt: new Date().toISOString() });
 
     const op: QaOperation = request.qaOp ?? { type: "coverage_gaps" };

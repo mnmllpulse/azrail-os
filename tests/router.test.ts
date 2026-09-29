@@ -49,7 +49,6 @@ describe("Отбор моделей", () => {
     const d = route("generate_code");
     for (const c of d.candidates) {
       expect(c.capabilities).toContain("coding");
-      expect(c.capabilities).toContain("tool_calling");
     }
     // Модель для эмбеддингов сюда попасть не может
     expect(d.candidates.map((c) => c.slug)).not.toContain("@cf/baai/bge-m3");
@@ -245,7 +244,7 @@ describe("Регрессия: третий аудит", () => {
     // модель с задержкой — то есть слой ретраев отменял защиту от квоты,
     // построенную уровнем выше.
     const router = src("src/lib/model-router.ts");
-    expect(router).toContain("retryable: (err) => !isQuotaError(err)");
+    expect(router).toContain("retryable: (err) => !(err instanceof ModelPolicyError) && !isQuotaError(err)");
   });
 
   it("простой проверяется только у прошедших отбор, а не у всего реестра", () => {

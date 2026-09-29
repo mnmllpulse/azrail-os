@@ -1,3 +1,4 @@
+import { withBillingScope, projectBillingScope } from "../lib/billing-context";
 import { Agent } from "agents";
 import { agentPrompt } from "../lib/azrail-prompt";
 import { log } from "../lib/resilience";
@@ -93,6 +94,10 @@ export class CodeAgent extends Agent<Env, CodeAgentState> {
   }
 
   async run(request: TaskRequest): Promise<TaskResult> {
+    return withBillingScope(request._billingScope ?? projectBillingScope(request.projectId), () => this.runScoped(request));
+  }
+
+  private async runScoped(request: TaskRequest): Promise<TaskResult> {
     this.setState({ lastRunAt: new Date().toISOString() });
 
     let context: string;

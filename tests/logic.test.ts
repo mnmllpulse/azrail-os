@@ -1,3 +1,4 @@
+import { sqliteD1 } from "./stubs/sqlite-d1";
 // AZRAIL — тесты чистой логики.
 //
 // Здесь нет моков Cloudflare и нет проверок работы с сетью: тестируется то,
@@ -468,7 +469,7 @@ describe("searchFiles — поиск ограничен по работе, а н
       counter: () => reads,
       env: {
         AZRAIL_R2: {
-          list: async () => ({ objects: files.slice(0, 500) }),
+          list: async ({limit=500}) => ({objects:files.slice(0,limit),truncated:files.length>limit,cursor:String(limit)}),
           get: async () => {
             reads++;
             return { text: async () => content };
@@ -697,19 +698,9 @@ describe("renderEvidence — что видит проверяющий", () => {
 
 describe("Бюджет записей — защита от неконтролируемого счёта", () => {
   const makeEnv = (start = 0, limit?: string) => {
-    const store = new Map<string, string>();
-    return {
-      store,
-      env: {
-        AZRAIL_WRITE_BUDGET: limit,
-        AZRAIL_KV: {
-          get: async (k: string) => (store.has(k) ? store.get(k)! : String(start)),
-          put: async (k: string, v: string) => {
-            store.set(k, v);
-          },
-        },
-      } as never,
-    };
+    const { db, sqlite } = sqliteD1();
+    sqlite.prepare("INSERT INTO request_quotas VALUES (?, ?, ?)").run("writes:shared", Math.floor(Date.now() / 3_600_000), start);
+    return { env: { AZRAIL_D1: db, AZRAIL_WRITE_BUDGET: limit } as never };
   };
 
   it("пропускает, пока есть запас", async () => {
@@ -732,7 +723,7 @@ describe("Бюджет записей — защита от неконтроли
     expect((await chargeWrites(env, 60)).allowed).toBe(false);
   });
 
-  it("недоступный KV не отключает работу молча", async () => {
+  it("недоступное хранилище запрещает расход", async () => {
     const env = {
       AZRAIL_KV: {
         get: async () => {
@@ -741,8 +732,8 @@ describe("Бюджет записей — защита от неконтроли
       },
     } as never;
     const r = await chargeWrites(env, 60);
-    // Пропускаем — но это залогировано как error, а не проглочено.
-    expect(r.allowed).toBe(true);
+    // Fail closed: отсутствие учёта не открывает бюджет.
+    expect(r.allowed).toBe(false);
   });
 
   it("оценка стоимости миссии растёт вместе с числом шагов", () => {

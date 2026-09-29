@@ -1,3 +1,4 @@
+import { sqliteD1 } from "./stubs/sqlite-d1";
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -9,35 +10,9 @@ const src = (p: string) => readFileSync(resolve(__dirname, "..", p), "utf-8");
 
 /** KV и D1 в памяти. */
 function fakeEnv(status = "executing") {
-  const kv = new Map<string, string>();
-  const deleted: string[] = [];
-  return {
-    kv,
-    deleted,
-    env: {
-      AZRAIL_KV: {
-        async get(k: string) {
-          return kv.get(k) ?? null;
-        },
-        async put(k: string, v: string) {
-          kv.set(k, v);
-        },
-        async delete(k: string) {
-          deleted.push(k);
-          kv.delete(k);
-        },
-      },
-      AZRAIL_D1: {
-        prepare() {
-          const stmt = {
-            bind: () => stmt,
-            first: async () => (status === "__missing__" ? null : { status }),
-          };
-          return stmt;
-        },
-      },
-    } as unknown as Env,
-  };
+  const {db,sqlite}=sqliteD1();
+  if(status!=="__missing__")sqlite.prepare("INSERT INTO missions(id,goal,status) VALUES('m1','test',?)").run(status);
+  return {sqlite,env:{AZRAIL_D1:db} as unknown as Env};
 }
 
 describe("Очередь подсказок", () => {
@@ -54,7 +29,7 @@ describe("Очередь подсказок", () => {
     await sendHint(f.env, "m1", "подсказка");
     await drainHints(f.env, "m1");
     expect(await drainHints(f.env, "m1")).toEqual([]);
-    expect(f.deleted).toContain("mission:hints:m1");
+    expect(f.sqlite.prepare("SELECT COUNT(*) AS n FROM mission_hints").get()?.n).toBe(0);
   });
 
   it("подсказки копятся в порядке отправки", async () => {
@@ -99,19 +74,15 @@ describe("Очередь подсказок", () => {
     expect(await sendHint(f.env, "нет", "текст")).toEqual({ ok: false, reason: "not_found" });
   });
 
-  it("испорченное значение в KV не роняет чтение", async () => {
+  it("истёкшая подсказка не доставляется", async () => {
     const f = fakeEnv();
-    f.kv.set("mission:hints:m1", "{это не JSON");
+    f.sqlite.prepare("INSERT INTO mission_hints(mission_id,text,expires_at) VALUES('m1','old',0)").run();
     expect(await drainHints(f.env, "m1")).toEqual([]);
   });
 
-  it("сбой KV не роняет миссию", async () => {
+  it("сбой очереди не роняет миссию", async () => {
     const broken = {
-      AZRAIL_KV: {
-        get: async () => {
-          throw new Error("KV недоступен");
-        },
-      },
+      AZRAIL_D1: { prepare() {throw new Error("D1 unavailable");} },
     } as unknown as Env;
     expect(await drainHints(broken, "m1")).toEqual([]);
   });

@@ -1,6 +1,6 @@
 {
   "name": "azrail-os",
-  "version": "0.6.2",
+  "version": "0.8.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,17 +9,29 @@
     "types": "wrangler types",
     "db:schema": "wrangler d1 execute azrail-db --remote --file=./schema.sql",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run build:ui && npm run typecheck && npm test",
+    "build:check": "wrangler deploy --dry-run --containers-rollout=none",
+    "db:security": "wrangler d1 execute azrail-db --remote --file=./migrations/004-security-hardening.sql",
+    "db:migrate": "node scripts/migrate.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "build:ui": "node scripts/build-ultimate.mjs",
+    "predeploy": "npm run build:ui"
   },
   "dependencies": {
-    "@cloudflare/sandbox": "^0.12.9",
+    "@cloudflare/sandbox": "0.12.9",
     "agents": "^0.8.0",
     "fflate": "^0.8.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240729.0",
+    "@types/node": "^24.13.6",
     "typescript": "^5.6.0",
     "vitest": "^4.1.11",
     "wrangler": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   }
 }

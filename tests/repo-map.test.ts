@@ -126,7 +126,7 @@ describe("Карта доходит до модели", () => {
     // «где искать» от одной правки не меняется.
     const mission = engine.slice(engine.indexOf("async runMission("));
     const built = mission.indexOf("renderRepoMap(buildRepoMap(");
-    const loop = mission.indexOf("for (let i = 0; i < maxIterations; i++)");
+    const loop = mission.indexOf("for (let i = checkpoints.length");
     expect(built).toBeGreaterThan(-1);
     expect(built, "карта должна строиться ДО цикла").toBeLessThan(loop);
   });

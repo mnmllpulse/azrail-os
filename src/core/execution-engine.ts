@@ -1,5 +1,8 @@
+import { withProjectLock, requireCapability, toolCapability } from "../lib/project-control";
+import { loadCheckpoints, checkpointTool, UncertainToolError } from "../lib/checkpoints";
+import { withBillingScope } from "../lib/billing-context";
 import type { Env, TaskRequest, TaskResult, ToolName } from "../types";
-import { applyPatch, editFile, listFiles, readFile, searchFiles, writeFileGuarded } from "../lib/workspace";
+import { applyPatch, editFile, listFiles, listFilesPage, readFile, searchFiles, writeFileGuarded } from "../lib/workspace";
 import { parseHunks } from "../lib/patch";
 import { describeTools, availableTools, TOOL_REGISTRY } from "../lib/tool-registry";
 import { extractText, runModel } from "../lib/model-router";
@@ -177,7 +180,8 @@ export class ExecutionEngine {
   constructor(private readonly env: Env) {}
 
   async executeTool(tool: ToolName, input: Record<string, unknown>, ctx: ExecutionContext): Promise<unknown> {
-    const def = describeTools().find((t) => t.name === tool);
+    await requireCapability(this.env,ctx.projectId,toolCapability(tool));
+    const def = describeTools(this.env).find((t) => t.name === tool);
     if (!def || !def.available) throw new Error(`Инструмент "${tool}" недоступен в текущем окружении.`);
 
     switch (tool) {
@@ -444,6 +448,10 @@ export class ExecutionEngine {
    *    если три шага подряд провалились, дело не в невезении.
    */
   async runMission(request: TaskRequest, ctx: ExecutionContext): Promise<TaskResult> {
+    return withBillingScope(`mission:${ctx.missionId}`, () =>
+      withProjectLock(this.env,ctx.projectId,ctx.missionId,()=>this.runMissionLocked(request,ctx)));
+  }
+  private async runMissionLocked(request: TaskRequest, ctx: ExecutionContext): Promise<TaskResult> {
     const goal = (request.message ?? request.payload ?? "").trim();
     if (!goal) {
       return {
@@ -464,9 +472,14 @@ export class ExecutionEngine {
       };
     }
 
-    const tools = availableTools();
+    if (ctx.shouldAbort && (await ctx.shouldAbort())) {
+      return {status:"failed", agent:"execution-engine", summary:"Миссия остановлена до планирования.", error:"cancelled"};
+    }
+    const tools = availableTools(this.env);
     const toolList = tools.map((t) => `- ${t.name} (${t.risk}): ${t.description}`).join("\n");
-    const history: StepRecord[] = [];
+    const checkpoints=await loadCheckpoints(this.env,ctx.missionId);
+    if(checkpoints.some(p=>!["completed","failed"].includes(p.status))) throw new Error("Восстановление остановлено: неопределённый результат шага.");
+    const history: StepRecord[] = checkpoints.map(p=>({tool:p.tool as ToolName,input:JSON.parse(p.input_json),ok:p.status==="completed",result:p.result_json??"null"}));
     const maxIterations = clampIterations(ctx.maxIterations);
     const workingSet = new WorkingSet();
     /* Предупреждение о повторе не тратит шаг бюджета: инструмент не
@@ -644,8 +657,9 @@ export class ExecutionEngine {
     }
 
     let snapshot: Snapshot | null = null;
-    let snapshotKey = "";
-    if (ctx.projectId) {
+    const savedSnapshot=await this.env.AZRAIL_D1.prepare("SELECT r2_key FROM mission_snapshots WHERE mission_id=?").bind(ctx.missionId).first<{r2_key:string}>();
+    let snapshotKey = savedSnapshot?.r2_key ?? "";
+    if (ctx.projectId && !snapshotKey) {
       snapshot = await snapshotWorkspace(this.env, ctx.projectId, goal);
       if (snapshot) {
         const row = await this.env.AZRAIL_D1.prepare(
@@ -654,6 +668,7 @@ export class ExecutionEngine {
           .bind(snapshot.versionId)
           .first<{ r2_object_key: string }>();
         snapshotKey = row?.r2_object_key ?? "";
+        if(snapshotKey) await this.env.AZRAIL_D1.prepare("INSERT OR IGNORE INTO mission_snapshots VALUES(?,?)").bind(ctx.missionId,snapshotKey).run();
         await this.note(ctx, "snapshot.taken", { files: snapshot.files });
       }
     }
@@ -676,7 +691,7 @@ export class ExecutionEngine {
       }
     }
 
-    for (let i = 0; i < maxIterations; i++) {
+    for (let i = checkpoints.length ? Math.max(...checkpoints.map(p=>p.step))+1 : 0; i < maxIterations; i++) {
       /* ── Точка останова ────────────────────────────────────────────
        * До этой проверки запущенную миссию нельзя было прекратить ничем:
        * кнопка «Отменить» в интерфейсе рвала HTTP-соединение, а цикл на
@@ -832,7 +847,7 @@ export class ExecutionEngine {
         }
 
         const changes = ctx.projectId
-          ? diffWorkspace(filesBefore, await this.readWorkspace(ctx.projectId).catch(() => filesBefore))
+          ? diffWorkspace(filesBefore, await this.readWorkspace(ctx.projectId))
           : [];
 
         const verdict = await checkResult(this.env, goal, history, ctx.preferredModel, renderChanges(changes), ctx.usage);
@@ -1066,16 +1081,22 @@ export class ExecutionEngine {
         continue;
       }
 
+      // Cancellation can arrive while the model is deciding; recheck before effects.
+      if (ctx.shouldAbort && (await ctx.shouldAbort())) {
+        return {status:"failed",agent:"execution-engine",summary:"Миссия остановлена перед следующим инструментом.",error:"cancelled"};
+      }
       const callId = crypto.randomUUID();
       const startedAt = new Date().toISOString();
       await this.note(ctx, "tool.started", { tool: known.name, reason: decision.reason, iteration: i });
 
       try {
+        await requireCapability(this.env,ctx.projectId,toolCapability(known.name));
         const stepPath = typeof decision.input?.path === "string" ? decision.input.path : "";
         const mutating = MUTATING_TOOLS.has(known.name) && !!stepPath && !!ctx.projectId;
         // Текст ДО правки — чтобы предупреждать только об ухудшении.
         const before = mutating ? ((await readFile(this.env, ctx.projectId!, stepPath).catch(() => null))?.content ?? null) : null;
-        const output = await this.executeTool(known.name, decision.input ?? {}, { ...ctx, iteration: i });
+        const mayHaveEffects = !["read_file","list_files","search_files","git_diff"].includes(known.name);
+        const output = await checkpointTool(this.env,ctx.missionId,i,known.name,decision.input??{},()=>this.executeTool(known.name, decision.input ?? {}, { ...ctx, iteration: i }),mayHaveEffects);
         const rendered = this.renderResult(output);
         const stepInput = decision.input ?? {};
         let historyText = rendered;
@@ -1108,6 +1129,7 @@ export class ExecutionEngine {
         consecutiveFailures++;
         await this.recordToolCall(ctx.missionId, callId, known.name, "failed", decision.input, null, msg, startedAt);
         await this.note(ctx, "tool.failed", { tool: known.name, error: msg, iteration: i });
+        if (err instanceof UncertainToolError) throw err;
 
         if (consecutiveFailures >= 3) {
           await this.note(ctx, "mission.failed", { reason: "три ошибки подряд" });
@@ -1151,7 +1173,9 @@ export class ExecutionEngine {
    *  после»: список путей без содержимого не показал бы, что файл
    *  переписали, — а это и есть главный интересующий случай. */
   private async readWorkspace(projectId: string): Promise<WorkspaceFile[]> {
-    const listed = await listFiles(this.env, projectId, 400);
+    const page = await listFilesPage(this.env, projectId, 400);
+    if (page.truncated) throw new Error("Workspace exceeds the 400-file verification limit; narrow the project before verification.");
+    const listed = page.files;
     const out: WorkspaceFile[] = [];
     for (const entry of listed) {
       const f = await readFile(this.env, projectId, entry.path);
@@ -1161,7 +1185,10 @@ export class ExecutionEngine {
   }
 
   private async runTestsInContainer(projectId: string) {
-    const listed = await listFiles(this.env, projectId, 400);
+    await requireCapability(this.env,projectId,"sandbox");
+    const page = await listFilesPage(this.env, projectId, 400);
+    if (page.truncated) throw new Error("Workspace exceeds the 400-file verification limit; narrow the project before verification.");
+    const listed = page.files;
     const files: WorkspaceFile[] = [];
     for (const entry of listed) {
       // Для выбора команды нужны только имена и package.json — читать
@@ -1180,8 +1207,9 @@ export class ExecutionEngine {
       return null;
     }
 
-    await syncWorkspaceToSandbox(this.env, projectId);
-    const res = await runInContainer(this.env, `cd ${SANDBOX_WORKDIR} && ${plan.command}`, {
+    const verificationDir = `${SANDBOX_WORKDIR}/.azrail-verify/${crypto.randomUUID()}`;
+    await syncWorkspaceToSandbox(this.env, projectId, {workdir:verificationDir});
+    const res = await runInContainer(this.env, `cd ${verificationDir} && ${plan.command}`, {
       sandboxName: projectId,
     });
 
@@ -1191,7 +1219,7 @@ export class ExecutionEngine {
      * напечатать что угодно ободряющее и выйти с ненулевым кодом. Именно
      * этим обманывается модель, читающая вывод глазами. */
     const parsed = parseTestOutput(res.output, res.exitCode);
-    const ok = res.exitCode === 0 && parsed.failed === 0;
+    const ok = !res.timedOut && res.exitCode === 0 && parsed.total > 0 && parsed.failed === 0;
     return {
       ...parsed,
       ok,
@@ -1656,7 +1684,14 @@ export function parseDecision(text: string): StepDecision | null {
     try {
       const v = JSON.parse(s);
       if (!v || typeof v !== "object") return null;
+      if (Array.isArray(v)) return null;
       const d = v as StepDecision;
+      if (d.tool !== undefined && (typeof d.tool !== "string" || !d.tool)) return null;
+      if (d.done !== undefined && typeof d.done !== "boolean") return null;
+      if (d.replan !== undefined && typeof d.replan !== "boolean") return null;
+      if (d.input !== undefined && (!d.input || typeof d.input !== "object" || Array.isArray(d.input))) return null;
+      if (d.reason !== undefined && typeof d.reason !== "string") return null;
+      if (d.summary !== undefined && typeof d.summary !== "string") return null;
       // Пустой объект — не решение: ни инструмента, ни признака конца,
       // ни просьбы пересобрать план.
       if (!d.tool && d.done !== true && d.replan !== true) return null;

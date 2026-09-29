@@ -54,7 +54,7 @@ describe("движок: проверка после правки встроен�
   const engine = readFileSync("src/core/execution-engine.ts", "utf8");
   it("текст читается ДО исполнения инструмента", () => {
     const beforeIdx = engine.indexOf("const before = mutating");
-    const execIdx = engine.indexOf("await this.executeTool(known.name");
+    const execIdx = engine.indexOf("await checkpointTool(this.env");
     expect(beforeIdx).toBeGreaterThan(-1);
     expect(beforeIdx).toBeLessThan(execIdx);
   });

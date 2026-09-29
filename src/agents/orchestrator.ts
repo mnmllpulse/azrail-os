@@ -1,3 +1,11 @@
+import { sendProjectEvent, socketAuthorized } from "../lib/socket-access";
+import { eligibleRegistry } from "../lib/model-policy";
+import { initializeMissionBudget } from "../lib/billing";
+import { withBillingScope, currentBillingScope, projectBillingScope } from "../lib/billing-context";
+import { withProjectLock, requireCapability } from "../lib/project-control";
+import { activeAccount, requireResource } from "../lib/accounts";
+import { loadCheckpoints } from "../lib/checkpoints";
+import { checkRateLimit } from "../lib/auth";
 import { Agent } from "agents";
 import { log } from "../lib/resilience";
 import { runModel, route, extractText } from "../lib/model-router";
@@ -78,9 +86,9 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
    * некому: карта миссии в интерфейсе живёт на сокете. Отсюда отдельный
    * вызов — не дубль хранения, а другая задача: показать сейчас.
    */
-  broadcastMissionEvent(payload: { id?: string; event: string; tool?: string; reason?: string; iteration?: number; maxIterations?: number; steps?: number; files?: number }): void {
+  async broadcastMissionEvent(payload: { id?: string; event: string; tool?: string; reason?: string; iteration?: number; maxIterations?: number; steps?: number; files?: number }, projectId?: string): Promise<void> {
     try {
-      this.broadcast(JSON.stringify({ type: "mission_event", ...payload }));
+      await sendProjectEvent(this.env, this.getConnections(), projectId, {type:"mission_event", ...payload});
     } catch (err) {
       log("warn", "orchestrator.mission_broadcast_failed", {
         event: payload.event,
@@ -89,7 +97,9 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     }
   }
 
-  onConnect(connection: import("agents").Connection) {
+  onConnect(connection: import("agents").Connection, context: import("agents").ConnectionContext) {
+    connection.setState({account:context.request.headers.get("X-Azrail-Account"),project:context.request.headers.get("X-Azrail-Project")});
+    this.setConnectionReadonly(connection, true);
     log("info", "orchestrator.ws_connect", { connectionId: connection.id });
   }
 
@@ -109,7 +119,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
    * обычных HTTP-роутов, а не только через сокет.
    */
   async onMessage(connection: import("agents").Connection, message: string | ArrayBuffer | ArrayBufferView) {
-    if (typeof message !== "string") return;
+    if (typeof message !== "string" || message.length > 16_384) return;
 
     let parsed: { type?: string; text?: string; conversationId?: string; preferredModel?: string };
     try {
@@ -117,17 +127,30 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     } catch {
       return; // не наш формат — не JSON вовсе
     }
-    if (parsed.type !== "chat" || !parsed.text?.trim()) return;
+    if (!parsed || parsed.type !== "chat" || typeof parsed.text !== "string" || !parsed.text.trim()) return;
+    if (parsed.conversationId !== undefined && (typeof parsed.conversationId !== "string" || parsed.conversationId.length > 128)) return;
+    if (parsed.preferredModel !== undefined && typeof parsed.preferredModel !== "string") return;
+    const session=connection.state as {account?:string;project?:string}|null;
+    const principal=session?.account?await activeAccount(this.env,session.account):null;
+    if(!principal || !session?.project) { connection.close(1008,"Session revoked");return; }
+    await requireResource(this.env,principal,"project",session.project);
+    if(principal.role==="viewer") return;
+    const quota = await checkRateLimit(this.env, principal.id);
+    if (!quota.allowed) {
+      connection.send(JSON.stringify({ type: "chat_reply", text: "Часовой лимит исчерпан или учёт расходов недоступен." }));
+      return;
+    }
 
     const userText = parsed.text.trim().slice(0, 4000);
     // Имя экземпляра объекта — это projectId, поэтому оно же годится как
     // идентификатор диалога по умолчанию: один проект — одна переписка,
     // пока пользователь явно не завёл другую.
-    const convId = parsed.conversationId ?? this.name ?? "default";
+    const convId = parsed.conversationId ?? session.project;
+    await requireResource(this.env,principal,"conversation",convId,true);
 
     let replyText: string;
     try {
-      await ensureConversation(this.env, convId, this.state.activeProjectId ?? undefined);
+      await ensureConversation(this.env, convId, session.project);
       await addMessage(this.env, convId, "user", userText);
 
       // Последние сообщения — достаточно для связного диалога, без выгрузки
@@ -144,7 +167,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
       // потеряло бы предмет разговора.
       const answered = await this.runCapability("reasoning", {
         payload: userText,
-        projectId: this.state.activeProjectId ?? undefined,
+        projectId: session.project,
         preferredModel: parsed.preferredModel,
         conversationHistory: history.slice(-10),
         intent: "answer",
@@ -163,7 +186,8 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
       });
     }
 
-    connection.send(JSON.stringify({ type: "chat_reply", conversationId: convId, text: replyText }));
+    if (await socketAuthorized(this.env,connection,session.project,convId))
+      connection.send(JSON.stringify({ type: "chat_reply", conversationId: convId, text: replyText }));
   }
 
   /**
@@ -263,10 +287,11 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
 
     // Какую модель выберет маршрутизатор — без единого вызова модели.
     // Показывает решение ДО того, как оно будет стоить денег.
+    const eligibleModels = await eligibleRegistry(this.env);
     const routing = ["generate_code", "classify", "embeddings"].map((intent) => {
       // Передаём РЕАЛЬНОЕ состояние шлюза: иначе показ маршрута разошёлся
       // бы с тем, что произойдёт при настоящем вызове.
-      const d = route(intent, { gatewayAvailable: !!this.env.AI_GATEWAY_ID });
+      const d = route(intent, { gatewayAvailable: !!this.env.AI_GATEWAY_ID }, eligibleModels);
       return {
         intent,
         chosen: d.candidates[0]?.slug ?? null,
@@ -289,6 +314,10 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
   }
 
   async handleTask(request: TaskRequest): Promise<TaskResult> {
+    return withBillingScope(projectBillingScope(request.projectId), () =>
+      withProjectLock(this.env,request.projectId,crypto.randomUUID(),()=>this.handleTaskLocked(request)));
+  }
+  private async handleTaskLocked(request: TaskRequest): Promise<TaskResult> {
     const taskId = crypto.randomUUID();
 
     // Шаг 2 — проверка достаточности данных
@@ -453,7 +482,12 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     preferredModel?: string;
     publicHostname?: string;
   }): Promise<{ scheduled: true; missionId: string }> {
-    await this.schedule(0, "runMissionTask", params);
+    const delivered=await this.ctx.storage.get<boolean>(`delivery:${params.missionId}`);
+    if(!delivered) {
+      await this.schedule(0, "runMissionTask", params);
+      await this.ctx.storage.put(`delivery:${params.missionId}`,true);
+    }
+    await this.env.AZRAIL_D1.prepare("UPDATE mission_outbox SET delivered=1 WHERE mission_id=?").bind(params.missionId).run();
     log("info", "mission.scheduled", { missionId: params.missionId, projectId: params.projectId });
     return { scheduled: true, missionId: params.missionId };
   }
@@ -477,7 +511,8 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
   }): Promise<TaskResult> {
     const stopHeartbeat = await this.keepAlive();
     try {
-      await markRunning(this.env, params.missionId);
+      await initializeMissionBudget(this.env, params.missionId);
+      if (!await markRunning(this.env, params.missionId)) throw new Error("Миссия уже запущена или остановлена.");
       const engine = new ExecutionEngine(this.env);
       const result = await engine.runMission(
         { message: params.goal, projectId: params.projectId },
@@ -490,9 +525,9 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
           // заведённая внутри, она считала бы один шаг и не отвечала бы на
           // вопрос «во что обошлась миссия» — то есть повторила бы судьбу
           // recallContext, которая была написана и никем не вызывалась.
-          usage: new UsageLedger(),
+          usage: new UsageLedger(`mission:${params.missionId}`),
           onEvent: (payload) => {
-            this.broadcastMissionEvent(payload);
+            return this.broadcastMissionEvent(payload, params.projectId);
           },
           invokeCapability: (capability, request) => this.runCapability(capability, request),
           shouldAbort: () => isCancelRequested(this.env, params.missionId),
@@ -527,6 +562,32 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
    * шанс быть выселенной на середине — ровно та же потеря работы, от
    * которой уходили, только по другой причине.
    */
+  private activeMissions = new Set<string>();
+
+  async recoverMission(missionId:string):Promise<{resumed:boolean;reason?:string}> {
+    if(this.activeMissions.has(missionId)) return {resumed:false,reason:"Миссия ещё выполняется."};
+    const mission=await this.env.AZRAIL_D1.prepare("SELECT status FROM missions WHERE id=?").bind(missionId).first<{status:string}>();
+    if(!mission || !["failed","cancelled","waiting_approval"].includes(mission.status)) return {resumed:false,reason:"Миссия отсутствует или уже завершена."};
+    const points=await loadCheckpoints(this.env,missionId);
+    if(points.some(p=>!["completed","failed"].includes(p.status))) return {resumed:false,reason:"Есть шаг с неопределённым результатом. Нужна ручная проверка, повтор запрещён."};
+    const row=await this.env.AZRAIL_D1.prepare("SELECT params FROM mission_outbox WHERE mission_id=?").bind(missionId).first<{params:string}>();
+    if(!row) return {resumed:false,reason:"Нет сохранённого задания."};
+    const params=JSON.parse(row.params);
+    if(this.activeMissions.has(missionId)) return {resumed:false,reason:"Миссия ещё выполняется."};
+    const busy=await this.env.AZRAIL_D1.prepare("SELECT owner FROM operation_locks WHERE project_id=?").bind(params.projectId).first<{owner:string}>();
+    if(busy && busy.owner!==missionId) return {resumed:false,reason:"Проект занят другой операцией."};
+    const claimed = await this.env.AZRAIL_D1.prepare(`UPDATE missions
+      SET status='queued',updated_at=?,finished_at=NULL,result_json=NULL
+      WHERE id=? AND status=? AND NOT EXISTS (
+        SELECT 1 FROM missions WHERE project_id=? AND id<>? AND status IN ('queued','executing','cancelling')
+      ) RETURNING id`).bind(new Date().toISOString(),missionId,mission.status,params.projectId,missionId).first();
+    if (!claimed) return {resumed:false,reason:"Состояние изменилось или проект занят другой миссией."};
+    await this.env.AZRAIL_D1.prepare("DELETE FROM operation_locks WHERE project_id=? AND owner=?").bind(params.projectId,missionId).run();
+    await this.ctx.storage.delete(`delivery:${missionId}`);
+    await this.startMission(params);
+    return {resumed:true};
+  }
+
   async runMissionTask(params: {
     missionId: string;
     projectId: string;
@@ -536,10 +597,18 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     publicHostname?: string;
   }): Promise<void> {
     const { missionId, projectId, goal } = params;
-    const stopHeartbeat = await this.keepAlive();
+    if(this.activeMissions.has(missionId)) return;
+    const final=await this.env.AZRAIL_D1.prepare("SELECT status FROM missions WHERE id=?").bind(missionId).first<{status:string}>();
+    if(final?.status==="cancelling") { await finishMission(this.env,missionId,"cancelled",{status:"failed",agent:"orchestrator",summary:"Миссия отменена.",error:"cancelled"});return; }
+    if(!final || final.status!=="queued") return;
+    if(this.activeMissions.has(missionId)) return;
+    this.activeMissions.add(missionId);
+    let stopHeartbeat = () => {};
 
     try {
-      await markRunning(this.env, missionId);
+      if (!await markRunning(this.env, missionId)) return;
+      stopHeartbeat = await this.keepAlive();
+      await initializeMissionBudget(this.env, missionId);
       const engine = new ExecutionEngine(this.env);
       const result = await engine.runMission(
         { message: goal, projectId, preferredModel: params.preferredModel },
@@ -552,25 +621,26 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
           // заведённая внутри, она считала бы один шаг и не отвечала бы на
           // вопрос «во что обошлась миссия» — то есть повторила бы судьбу
           // recallContext, которая была написана и никем не вызывалась.
-          usage: new UsageLedger(),
+          usage: new UsageLedger(`mission:${params.missionId}`),
           preferredModel: params.preferredModel,
           // Рассылка идёт прямо отсюда: мы уже ВНУТРИ нужного объекта, и
           // межобъектного вызова (с его "Cannot perform I/O on behalf of a
           // different Durable Object") здесь больше не возникает в принципе.
           onEvent: (payload) => {
-            this.broadcastMissionEvent(payload);
+            return this.broadcastMissionEvent(payload, params.projectId);
           },
           invokeCapability: (capability, request) => this.runCapability(capability, request),
           publicHostname: params.publicHostname,
           shouldAbort: () => isCancelRequested(this.env, missionId),
+          takeHints: () => drainHints(this.env, missionId),
         },
       );
 
       await finishMission(this.env, missionId, statusForResult(result), result);
-      this.broadcastMissionEvent({
+      await this.broadcastMissionEvent({
         event: result.error === "cancelled" ? "mission.cancelled" : `mission.${result.status}`,
         reason: result.summary,
-      });
+      }, projectId);
     } catch (err) {
       // Падение цикла НЕ должно оставлять миссию висящей. Раньше такого
       // пути не было вовсе: исключение улетало в обработчик HTTP, а строку
@@ -583,13 +653,15 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
         summary: "Миссия прервалась из-за внутренней ошибки.",
         error: message,
       });
-      this.broadcastMissionEvent({ event: "mission.failed", reason: message });
+      await this.broadcastMissionEvent({ event: "mission.failed", reason: message }, projectId);
     } finally {
+      this.activeMissions.delete(missionId);
       stopHeartbeat();
     }
   }
 
   private async runCapability(capability: Capability, request: TaskRequest): Promise<TaskResult> {
+    await requireCapability(this.env,request.projectId,capability);
     const candidates = findByCapability(capability);
     if (candidates.length === 0) {
       // Возможность объявлена в маппинге, но агента под неё нет — это баг
@@ -602,13 +674,14 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     }
     const entry = candidates[0];
     const agent = await this.subAgent(entry.agentClass, `${entry.id}-${request.projectId ?? "default"}`);
-    return agent.run(request);
+    return agent.run({ ...request, _billingScope: currentBillingScope() ?? projectBillingScope(request.projectId) });
   }
 
   /** Коммитит сгенерированные файлы через Git Agent — по файлу за коммит
    *  (Contents API атомарен на файл). Неуспешные не глотаем: каждый файл
    *  возвращает свой статус, чтобы частичный коммит был виден. */
   private async commitFiles(request: TaskRequest, files: GeneratedFile[]) {
+    await requireCapability(this.env,request.projectId,"git");
     if (files.length === 0) return [];
     const gitAgent = await this.subAgent(GitAgent, `git-${request.projectId ?? "default"}`);
     const out: Array<{ path: string; status: string; detail: string }> = [];
@@ -769,7 +842,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     // ронять запись в D1 ниже, если вдруг сама упадёт (нет причин, но
     // соединения — внешний, менее предсказуемый канал, чем собственная база).
     try {
-      this.broadcast(JSON.stringify({
+      await sendProjectEvent(this.env, this.getConnections(), request.projectId, {
         type: "task_event",
         taskId: id,
         intent,
@@ -778,7 +851,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
         summary: outputSummary ?? null,
         error: error ?? null,
         at: finishedAt ?? new Date().toISOString(),
-      }));
+      });
     } catch (broadcastErr) {
       log("warn", "orchestrator.broadcast_failed", {
         taskId: id,

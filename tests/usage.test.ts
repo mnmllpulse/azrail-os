@@ -129,7 +129,7 @@ describe("Учёт встроен в систему, а не лежит мёрт
     // на вопрос «во что обошлась миссия» — то есть повторила бы судьбу
     // recallContext, которая была написана и никем не вызывалась.
     const orch = src("src/agents/orchestrator.ts");
-    expect(orch.match(/usage: new UsageLedger\(\)/g)?.length).toBe(2);
+    expect(orch.match(/usage: new UsageLedger\(`/g)?.length).toBe(2);
   });
 
   it("копилка доходит до каждого вызова цикла", () => {

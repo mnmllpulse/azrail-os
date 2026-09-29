@@ -1,3 +1,4 @@
+import { withBillingScope, projectBillingScope } from "../lib/billing-context";
 import { Agent } from "agents";
 import { assertRepo, UnsafePathError } from "../lib/safe-path";
 import { unzipSync } from "fflate";
@@ -38,6 +39,10 @@ export class DeployAgent extends Agent<Env, DeployAgentState> {
   }
 
   async run(request: TaskRequest): Promise<TaskResult> {
+    return withBillingScope(request._billingScope ?? projectBillingScope(request.projectId), () => this.runScoped(request));
+  }
+
+  private async runScoped(request: TaskRequest): Promise<TaskResult> {
     this.setState({ lastRunAt: new Date().toISOString() });
 
     if (request.inputType === "zip" && request.r2Key) {

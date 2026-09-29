@@ -110,7 +110,7 @@ describe("Оба пути читают вложения", () => {
   it("самостоятельная миссия", () => {
     // Починить один путь и забыть второй — ровно так этот класс ошибок
     // и живёт долго.
-    const mission = src.slice(src.indexOf('"/api/mission" && request.method === "POST"'));
+    const mission = src.slice(src.lastIndexOf('"/api/mission" && request.method === "POST"'));
     expect(mission.slice(0, 1200)).toContain("attachmentsToText");
   });
 });

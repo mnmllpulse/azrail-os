@@ -1,3 +1,4 @@
+import { withBillingScope, projectBillingScope } from "../lib/billing-context";
 import { Agent } from "agents";
 import { assertRepo, pathSegments, UnsafePathError } from "../lib/safe-path";
 import type { Env, GitAgentState, TaskRequest, TaskResult, GitOperation } from "../types";
@@ -42,6 +43,10 @@ export class GitAgent extends Agent<Env, GitAgentState> {
   }
 
   async run(request: TaskRequest): Promise<TaskResult> {
+    return withBillingScope(request._billingScope ?? projectBillingScope(request.projectId), () => this.runScoped(request));
+  }
+
+  private async runScoped(request: TaskRequest): Promise<TaskResult> {
     this.setState({ lastRunAt: new Date().toISOString() });
 
     if (!this.env.GITHUB_TOKEN) {

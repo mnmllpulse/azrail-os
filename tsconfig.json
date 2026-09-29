@@ -4,7 +4,7 @@
     "lib": ["es2022"],
     "module": "es2022",
     "moduleResolution": "bundler",
-    "types": ["@cloudflare/workers-types"],
+    "types": ["@cloudflare/workers-types", "node"],
     "strict": true,
     // Ловит мёртвые импорты и переменные на этапе компиляции. Найдено
     // ручной проверкой: два импорта висели неиспользованными, и tsc об

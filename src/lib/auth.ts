@@ -9,7 +9,7 @@
 // забытая настройка = открытый кошелёк. Лучше явная ошибка при старте.
 
 import type { Env } from "../types";
-import { log } from "./resilience";
+import { positiveLimit, reserveQuota } from "./quota";
 
 export interface AuthResult {
   ok: boolean;
@@ -43,19 +43,10 @@ export function checkAuth(request: Request, env: Env): AuthResult {
   }
 
   const header = request.headers.get("Authorization") ?? "";
-  let token = header.startsWith("Bearer ") ? header.slice(7) : "";
-
-  // WebSocket-хендшейк не даёт JS выставить кастомный заголовок (ограничение
-  // самого браузерного API, не этого проекта) — единственный канал для
-  // токена там URL. Запасной путь читается, только если заголовка нет, а не
-  // вместо него: тот, кто прислал оба, не получает два шанса подобрать токен.
-  if (!token) {
-    const url = new URL(request.url);
-    token = url.searchParams.get("token") ?? "";
-  }
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
 
   if (!token) {
-    return { ok: false, status: 401, error: "Нужен заголовок Authorization: Bearer <токен> (или ?token= для WebSocket)." };
+    return { ok: false, status: 401, error: "Нужен заголовок Authorization: Bearer <токен>." };
   }
   if (!safeEqual(token, env.AZRAIL_TOKEN)) {
     return { ok: false, status: 401, error: "Неверный токен." };
@@ -66,84 +57,7 @@ export function checkAuth(request: Request, env: Env): AuthResult {
   return { ok: true, caller: "shared" };
 }
 
-// ─── Лимит расхода ────────────────────────────────────────────────────────
-
-const DEFAULT_HOURLY_LIMIT = 50;
-
-export interface RateLimitResult {
-  allowed: boolean;
-  used: number;
-  limit: number;
-  /** Unix-время, когда счётчик обнулится */
-  resetAt: number;
-}
-
-/** Счётчик задач за час, в KV. Окно фиксированное (по часам календаря), а не
- *  скользящее: скользящее требует хранить таймстемпы каждого запроса, что при
- *  KV-хранилище дороже самой защиты. Это упрощение — на границе часа лимит
- *  можно превысить почти вдвое, и это осознанный компромисс, а не недосмотр. */
-/**
- * Лимит запусков модели в час.
- *
- * `cost` — сколько единиц списать. Он появился не для симметрии: обычная
- * задача через /api/task — это ОДИН проход агента, а миссия через
- * /api/mission прогоняет до двадцати вызовов модели подряд. Считать их
- * одинаково значит оставить самый дорогой путь фактически без ограничения:
- * двадцать миссий подряд стоят как четыреста обычных задач, а счётчик
- * покажет двадцать.
- */
-export async function checkRateLimit(env: Env, caller: string, cost = 1): Promise<RateLimitResult> {
-  const limit = Number(env.AZRAIL_HOURLY_LIMIT) || DEFAULT_HOURLY_LIMIT;
-  const now = Date.now();
-  const hourBucket = Math.floor(now / 3_600_000);
-  const key = `ratelimit:${caller}:${hourBucket}`;
-  const resetAt = (hourBucket + 1) * 3_600_000;
-
-  let used = 0;
-  try {
-    used = Number(await env.AZRAIL_KV.get(key)) || 0;
-  } catch (err) {
-    // KV недоступен — не блокируем работу из-за счётчика. Раньше комментарий
-    // здесь утверждал, что "вызывающий код это залогирует" — неправда:
-    // index.ts логирует только ветку rl.allowed === false, а этот путь
-    // всегда возвращает allowed: true, так что вызывающий код её никогда
-    // не увидит. Найдено при аудите. Логируем здесь же, у источника.
-    log("error", "ratelimit.kv_unavailable", {
-      caller,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    /* FAIL-CLOSED, как и сама авторизация выше.
-     *
-     * Здесь раньше стояло `allowed: true`: недоступность KV СНИМАЛА лимит
-     * расхода целиком. То есть защита кошелька открывалась ровно в тот
-     * момент, когда переставала работать — и именно в такие моменты
-     * клиенты обычно и молотят повторами.
-     *
-     * Осознанная цена: при сбое KV платные пути отказывают. Это заметно
-     * и чинится; неограниченный счёт — нет. Оба решения нельзя иметь
-     * одновременно, и выбирается то, чья ошибка обратима. */
-    return { allowed: false, used: 0, limit, resetAt };
-  }
-
-  // Проверяем ПОЛНУЮ стоимость до списания, а не факт «остался хоть один».
-  // Иначе миссия ценой в 8 единиц пролезала бы при одном свободном месте,
-  // и лимит превращался бы в пожелание.
-  if (used + cost > limit) {
-    return { allowed: false, used, limit, resetAt };
-  }
-
-  try {
-    // TTL чуть больше часа: ключ уйдёт сам, чистить не нужно.
-    await env.AZRAIL_KV.put(key, String(used + cost), { expirationTtl: 3900 });
-  } catch (err) {
-    // Инкремент не прошёл — пропускаем запрос, счётчик просто менее точен.
-    // Ниже серьёзности предыдущего catch (лимит не отключается целиком),
-    // но тот же принцип: не молчать про недоступность KV.
-    log("warn", "ratelimit.kv_increment_failed", {
-      caller,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-
-  return { allowed: true, used: used + cost, limit, resetAt };
+/** Atomic model-call reservations; unavailable storage fails closed. */
+export async function checkRateLimit(env: Env, caller: string, cost = 1) {
+  return reserveQuota(env, `models:${caller}`, cost, positiveLimit(env.AZRAIL_HOURLY_LIMIT, 50));
 }
