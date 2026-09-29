@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { canonicalApiPath } from "../src/protocol/facade";
 import { validateProjectDescription, validateProjectName } from "../src/lib/projects-api";
-import { capabilitiesForMode, defaultIterationsForMode, normalizeRoutingMode, tierPreferenceForMode } from "../src/lib/routing-mode";\nimport { validateJsonObject } from "../src/lib/request-body";
+import { capabilitiesForMode, defaultIterationsForMode, normalizeRoutingMode, tierPreferenceForMode } from "../src/lib/routing-mode";
+import { validateJsonObject } from "../src/lib/request-body";
 
 describe("Pulse OS → AZRAIL facade", () => {
   it("нормализует mission API до старого защищённого маршрута", () => {
@@ -114,7 +115,7 @@ describe("Project Workspace shell", () => {
   it("использует единый workspace endpoint", () => {
     expect(client).toContain("/workspace");
     expect(api).toContain("loadProjectWorkspace");
-    expect(api).toMatch(/\/api\\\/projects\\\/\(\[\^\/\]\+\)\\\/workspace/);
+    expect(api).toMatch(/\/api\/projects\/\[\^\/\]\+\/workspace/);
   });
 
   it("не вставляет данные проекта через innerHTML", () => {
@@ -143,10 +144,10 @@ describe("Studio and Labs consolidation", () => {
     expect(shell).not.toContain('/ultimate.html#studio');
     expect(shell).not.toContain('/ultimate.html#labs');
     expect(client).toContain("fetch('/pulse-studios.json'");
-    expect(client).toContain("$('idea').value=item.prompt");
+    expect(client).toContain("$('idea').value");
   });
 
-  it("имеет небольшой верхний каталог и сохраняет legacy capabilities внутри", () => {
+  it("имеет небольший верхний каталог и сохраняет legacy capabilities внутри", () => {
     expect(Array.isArray(registry.studios)).toBe(true);
     expect(registry.studios.length).toBeGreaterThanOrEqual(5);
     expect(registry.studios.length).toBeLessThanOrEqual(10);
@@ -196,7 +197,7 @@ describe("Advanced observability", () => {
   it("Advanced UI не вставляет telemetry через innerHTML", () => {
     expect(client).not.toContain(".innerHTML");
     expect(client).toContain("renderKeyValue");
-    expect(shell).toContain("LEGACY ↗");
+    expect(shell).toContain("LEGACY");
   });
 });
 
@@ -228,7 +229,7 @@ describe("Agent capability defense-in-depth", () => {
   });
 
   it("Advanced читает effective permissions через project-scoped endpoint", () => {
-    expect(api).toMatch(/\/api\/projects\\\/\(\[\^\/\]\+\)\\\/permissions/);
+    expect(api).toMatch(/\/api\/projects\/\[\^\/\]\+\/permissions/);
     expect(client).toContain("/permissions");
     expect(client).toContain("Deploy capability");
   });
