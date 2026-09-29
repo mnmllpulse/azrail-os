@@ -96,6 +96,16 @@ Dry run проверяет сборку/config, но не доказывает �
 10. presence heartbeat → Globe marker
 11. подтверждение, что staging bindings не совпадают с production
 
+Команда read-only smoke после deploy:
+
+    AZRAIL_URL=https://<staging-worker>.workers.dev AZRAIL_TOKEN=<staging-token> npm run smoke
+
+Если уже есть staging Project и нужно проверить ownership-protected metrics:
+
+    AZRAIL_URL=https://<staging-worker>.workers.dev AZRAIL_TOKEN=<staging-token> AZRAIL_PROJECT_ID=<project-id> npm run smoke
+
+Smoke не создаёт миссии и не пишет presence — это отдельные ручные/интеграционные проверки.
+
 ## 10. Promotion
 
 Продвигается код, а не staging resource IDs. Production D1/KV/R2 остаются неизменными.
