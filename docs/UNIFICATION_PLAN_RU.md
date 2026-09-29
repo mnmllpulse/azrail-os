@@ -104,3 +104,18 @@ Canva v2: **DARK MNMLL PULSE OS × AZRAIL — Unified Interface Concept v2**
 - Scope: CREATE / STUDIO / PROJECTS / LABS / SYSTEM / ADVANCED
 - Visual hierarchy: one Composer, Pulse Globe background, restrained violet accent, mission progress, no decorative fake metrics.
 - This reference follows the implemented Shell. It is not a separate competing design system.
+
+
+## CI blocker — подтверждённая причина
+
+GitHub Actions workflow создаётся, но jobs не получают runner.
+
+Фактические признаки из REST payload:
+
+- `runner_id = 0`;
+- `runner_name = ""`;
+- `steps = []`;
+- jobs завершаются failure через 1–2 секунды;
+- даже диагностический `bootstrap-runner` без checkout/npm/code падает так же.
+
+Следовательно, текущий красный CI не доказывает ошибку проекта: код не начинает выполняться вообще. До восстановления GitHub-hosted runner / Actions account setting PR нельзя считать проверенным и нельзя автоматически merge/deploy.
