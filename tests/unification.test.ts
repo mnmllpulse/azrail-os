@@ -127,3 +127,39 @@ describe("Project Workspace shell", () => {
     expect(client).toContain("heartbeatPresence()");
   });
 });
+
+
+describe("Studio and Labs consolidation", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+  const registry = JSON.parse(fs.readFileSync(path.join(root, "public/pulse-studios.json"), "utf8"));
+
+  it("оставляет один Composer вместо отдельных runtime студий", () => {
+    expect(shell).toContain('id="studiosOpen"');
+    expect(shell).toContain('id="labsOpen"');
+    expect(shell).toContain('href="/ultimate.html">ADVANCED</a>');
+    expect(shell).not.toContain('/ultimate.html#studio');
+    expect(shell).not.toContain('/ultimate.html#labs');
+    expect(client).toContain("fetch('/pulse-studios.json'");
+    expect(client).toContain("$('idea').value=item.prompt");
+  });
+
+  it("имеет небольшой верхний каталог и сохраняет legacy capabilities внутри", () => {
+    expect(Array.isArray(registry.studios)).toBe(true);
+    expect(registry.studios.length).toBeGreaterThanOrEqual(5);
+    expect(registry.studios.length).toBeLessThanOrEqual(10);
+    const ids = new Set(registry.studios.map((x: { id: string }) => x.id));
+    expect(ids.has("development")).toBe(true);
+    expect(ids.has("creative")).toBe(true);
+    expect(ids.has("agents")).toBe(true);
+    expect(ids.has("pulse-lab")).toBe(true);
+    const modules = registry.studios.flatMap((x: { modules?: string[] }) => x.modules ?? []);
+    expect(modules).toContain("QuantumAgentOrchestrator");
+    expect(modules).toContain("CodeStudioPanel");
+  });
+
+  it("не использует innerHTML для project/studio данных", () => {
+    expect(client).not.toMatch(/innerHTML\s*=/);
+  });
+});
