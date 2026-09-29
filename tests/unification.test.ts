@@ -315,3 +315,35 @@ describe("Canonical Pulse entrypoint", () => {
     expect(fs.existsSync(path.join(root, "public/pulse.html"))).toBe(true);
   });
 });
+
+
+describe("Staging isolation", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const production = fs.readFileSync(path.join(root, "wrangler.toml"), "utf8");
+  const staging = fs.readFileSync(path.join(root, "wrangler.staging.toml"), "utf8");
+  const guard = fs.readFileSync(path.join(root, "scripts/check-staging.mjs"), "utf8");
+  const capture = (text: string, re: RegExp) => re.exec(text)?.[1];
+
+  it("использует отдельные имена хранилищ и force-free", () => {
+    expect(staging).toContain('database_name = "azrail-db-staging"');
+    expect(staging).toContain('bucket_name = "azrail-artifacts-staging"');
+    expect(staging).toContain('AZRAIL_FORCE_FREE = "true"');
+    expect(staging).toContain('AZRAIL_WRITE_BUDGET = "1000"');
+  });
+
+  it("не содержит production resource identifiers", () => {
+    const prodD1 = capture(production,/database_id\\s*=\\s*"([^"]+)"/);
+    const prodKv = capture(production,/\\[\\[kv_namespaces\\]\\][\\s\\S]*?\\nid\\s*=\\s*"([^"]+)"/);
+    expect(prodD1).toBeTruthy(); expect(prodKv).toBeTruthy();
+    expect(staging).not.toContain(String(prodD1));
+    expect(staging).not.toContain(String(prodKv));
+  });
+
+  it("не включает production Sandbox и guard проверяет placeholders", () => {
+    expect(staging).not.toContain("[[containers]]");
+    expect(staging).not.toContain("AZRAIL_SANDBOX");
+    expect(guard).toContain("REPLACE_[A-Z0-9_]+");
+    expect(guard).toContain("Staging D1 must not equal production D1");
+    expect(guard).toContain("Staging R2 must not equal production R2");
+  });
+});
