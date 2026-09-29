@@ -67,19 +67,18 @@ export async function listPresence(
   projectId?: string,
 ): Promise<PresenceSession[]> {
   const since = Date.now() - ACTIVE_WINDOW_MS;
-  const query = projectId
-    ? env.AZRAIL_D1.prepare(
-        `SELECT session_id,project_id,country,edge,lat,lon,last_seen
-         FROM pulse_presence
-         WHERE last_seen>=? AND (project_id=? OR project_id IS NULL)
-         ORDER BY last_seen DESC LIMIT ?`,
-      ).bind(since, projectId, MAX_SESSIONS)
-    : env.AZRAIL_D1.prepare(
-        `SELECT session_id,project_id,country,edge,lat,lon,last_seen
-         FROM pulse_presence
-         WHERE last_seen>=?
-         ORDER BY last_seen DESC LIMIT ?`,
-      ).bind(since, MAX_SESSIONS);
+  const accountClause = principal.role === "admin" ? "" : " AND account_id=?";
+  const projectClause = projectId ? " AND (project_id=? OR project_id IS NULL)" : "";
+  const sql =
+    `SELECT session_id,project_id,country,edge,lat,lon,last_seen
+     FROM pulse_presence
+     WHERE last_seen>=?${accountClause}${projectClause}
+     ORDER BY last_seen DESC LIMIT ?`;
+  const values: Array<string | number> = [since];
+  if (principal.role !== "admin") values.push(principal.id);
+  if (projectId) values.push(projectId);
+  values.push(MAX_SESSIONS);
+  const query = env.AZRAIL_D1.prepare(sql).bind(...values);
 
   const rows = await query.all<{
     session_id: string; project_id: string | null; country: string | null; edge: string | null;
