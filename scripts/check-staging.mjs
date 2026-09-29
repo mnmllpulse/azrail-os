@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("../", import.meta.url);
-const stagingPath = resolve(root.pathname, "wrangler.staging.toml");
-const productionPath = resolve(root.pathname, "wrangler.toml");
+const root = fileURLToPath(new URL("../", import.meta.url));
+const stagingPath = resolve(root, "wrangler.staging.toml");
+const productionPath = resolve(root, "wrangler.toml");
 const staging = readFileSync(stagingPath, "utf8");
 const production = readFileSync(productionPath, "utf8");
 
