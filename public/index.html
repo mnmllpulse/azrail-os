@@ -896,6 +896,125 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
   .panel-body { padding: var(--s4); }
 
   .wordmark { font-size: clamp(34px, 11vw, 52px); }
+  .globe-stage { width: min(80vw, 300px); height: min(80vw, 300px); }
+}
+/* ─────────────────────────────────────────────────────────────────────
+   ПЛАНЕТА.
+
+   Знак бренда — «Intelligence That Moves the Planet» — до сих пор был
+   только подписью. Теперь он нарисован: каркасный шар с меридианами и
+   параллелями, три орбитальных кольца с разным наклоном и узлы на
+   поверхности. Всё рисуется на <canvas> в 2D: ни WebGL, ни внешних
+   библиотек, ни единого сетевого запроса — страница остаётся
+   самодостаточной, как и была.
+
+   Вращение МЕДЛЕННОЕ и намеренно: 0.055 рад/с у шара, кольца ещё
+   медленнее. Быстрое вращение в углу экрана перетягивает внимание с
+   поля ввода, ради которого сюда и приходят.
+
+   Движение подчиняется общему переключателю «Движение» в «Служебном» и
+   prefers-reduced-motion: при выключенном движении шар отрисовывается
+   ОДИН раз в статичной позе, а не исчезает. Пустое место на месте
+   знака выглядит как незагрузившаяся картинка.
+   ───────────────────────────────────────────────────────────────────── */
+.hero-grid {
+  display: grid; grid-template-columns: minmax(0,1fr) 360px;
+  gap: var(--s6); align-items: center;
+}
+.hero-grid > div:first-child { position: relative; z-index: 1; }
+.globe-stage { position: relative; width: 360px; height: 360px; justify-self: end; }
+.globe-stage::before {
+  content: ""; position: absolute; inset: -14%; border-radius: 50%; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(152,112,255,.20), transparent 60%),
+    radial-gradient(circle at 62% 66%, rgba(118,185,255,.13), transparent 55%);
+  filter: blur(26px);
+}
+.globe-stage canvas { position: relative; z-index: 1; display: block; width: 100%; height: 100%; }
+@media (min-width: 861px) and (max-width: 1180px) {
+  .hero-grid { grid-template-columns: minmax(0,1fr) 280px; }
+  .globe-stage { width: 280px; height: 280px; }
+}
+/* НА ТЕЛЕФОНЕ ПЛАНЕТА НЕ ЗАНИМАЕТ МЕСТА.
+   Ровно эта ошибка уже была допущена и исправлена: трёхмерная сцена во
+   весь экран отодвигала поле ввода за нижний край, и первое, что должно
+   попадаться на глаза — «Что построим сегодня?» — приходилось искать
+   прокруткой. Поэтому здесь планета уходит из потока за текст: знак
+   виден, высота шапки не меняется ни на пиксель. */
+@media (max-width: 860px) {
+  .hero-grid { grid-template-columns: 1fr; position: relative; }
+  .globe-stage {
+    position: absolute; right: -8%; top: 50%; transform: translateY(-50%);
+    width: 210px; height: 210px; opacity: .45; z-index: 0; pointer-events: none;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   МОДУЛИ.
+
+   Студии, лаборатории, проект, модели и администрирование жили на
+   отдельных страницах (/control.html) или не жили нигде: бэкенд отдавал
+   /api/metrics, /api/backups, /api/admin/* и /api/projects/*/versions в
+   пустоту — ни одна строка главного экрана их не читала.
+
+   Общая оболочка вместо четырёх разных: один токен, одно состояние,
+   один визуальный язык. Формы ниже переиспользуют .row/.label/.mini/.out
+   главного экрана — отдельный «дизайн админки» здесь не нужен и был бы
+   пятым набором правил в том же файле.
+   ───────────────────────────────────────────────────────────────────── */
+.mod-card {
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: linear-gradient(180deg, rgba(14,16,22,.72), rgba(6,7,11,.72));
+  padding: var(--s4) var(--s5); margin-bottom: var(--s4);
+}
+.mod-card > h3 {
+  margin: 0; font-family: var(--display); font-size: 12px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: #cbbaff;
+}
+.mod-card > .note:first-of-type { margin-top: var(--s2); }
+.mod-card .row:first-of-type { margin-top: var(--s3); }
+.row input[type=number] {
+  flex: 1; min-width: 120px; background: rgba(255,255,255,.025);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 9px 12px; outline: none; font-size: 15px;
+}
+.mod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--s3); margin-top: var(--s4); }
+.mod-tile {
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: var(--s4); background: rgba(255,255,255,.02);
+  display: grid; gap: 6px; align-content: start;
+}
+.mod-tile b { font-size: 15px; font-weight: 600; }
+.mod-tile span { font-size: 13px; color: var(--muted); line-height: 1.45; }
+.mod-tile .tag {
+  justify-self: start; font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+  text-transform: uppercase; color: #9aa2b0;
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px;
+}
+.mod-tile.live { border-color: rgba(83,213,159,.28); }
+.mod-tile.live .tag { color: var(--good); border-color: rgba(83,213,159,.35); }
+.mod-tile.off { opacity: .62; }
+/* Строка списка: запись бэкапа, версии, факта памяти, аккаунта, тарифа.
+   Одна форма на все пять — они отличаются содержимым, а не устройством. */
+.mod-item {
+  display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap;
+  padding: var(--s3) 0; border-bottom: 1px solid var(--line);
+}
+.mod-item:last-child { border-bottom: 0; }
+.mod-item b { font-size: 14px; font-weight: 600; }
+.mod-item code { font-family: var(--mono); font-size: 12px; color: #9aa2b0; overflow-wrap: anywhere; }
+.mod-item span { font-size: 13px; color: var(--muted); }
+.mod-item .push { margin-left: auto; display: flex; gap: var(--s2); }
+.mod-empty { color: var(--muted); font-size: 13px; padding: var(--s3) 0; }
+.mod-stat { display: flex; gap: var(--s5); flex-wrap: wrap; margin-top: var(--s4); }
+.mod-stat > div { display: grid; gap: 2px; }
+.mod-stat b { font-family: var(--display); font-size: 22px; font-weight: 700; }
+.mod-stat span { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.mod-bad { color: var(--bad); }
+.mod-ok { color: var(--good); }
+@media (max-width: 650px) {
+  .mod-card { padding: var(--s4); }
+  .mod-item .push { margin-left: 0; flex-basis: 100%; }
 }
 </style>
 </head>
@@ -940,12 +1059,31 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     <button class="nav-item" data-open="viewSandbox"><i class="nav-dot"></i><span>Песочница</span></button>
     <button class="nav-item" data-open="viewHistory"><i class="nav-dot"></i><span>История</span><i class="sub" id="histCount"></i></button>
   </div>
+  <!-- СТУДИИ И ЛАБОРАТОРИИ — здесь, а не на отдельной странице.
+       Раньше каталог агентов жил в /control.html, а список инструментов —
+       в «Умениях» главного экрана. Одно и то же знание о том, что система
+       умеет, было разорвано между двумя страницами с разными токенами. -->
+  <div class="nav-group">
+    <div class="nav-label">Студии и лаборатории</div>
+    <button class="nav-item" data-open="viewStudios"><i class="nav-dot"></i><span>Студии</span><i class="sub" id="studioCount"></i></button>
+    <button class="nav-item" id="navTools" data-open="viewSkills"><i class="nav-dot"></i><span>Умения</span><i class="sub" id="toolCount"></i></button>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Проект</div>
+    <button class="nav-item" data-open="viewProject"><i class="nav-dot"></i><span>Обзор и метрики</span></button>
+    <button class="nav-item" data-open="viewMemory"><i class="nav-dot"></i><span>Память и версии</span></button>
+  </div>
   <div class="nav-group">
     <div class="nav-label">Система</div>
-    <a class="nav-item" href="/ultimate.html"><i class="nav-dot"></i><span>Новый рабочий экран</span></a>
-    <a class="nav-item" href="/control.html"><i class="nav-dot"></i><span>Проект и студии</span></a>
+    <button class="nav-item" data-open="viewModels"><i class="nav-dot"></i><span>Модели и маршрут</span><i class="sub" id="modelCount"></i></button>
+    <button class="nav-item hidden" id="navAdmin" data-open="viewAdmin"><i class="nav-dot"></i><span>Администрирование</span></button>
     <button class="nav-item" data-open="viewOps"><i class="nav-dot"></i><span>Служебное</span></button>
-    <button class="nav-item" id="navTools" data-open="viewSkills"><i class="nav-dot"></i><span>Умения</span><i class="sub" id="toolCount"></i></button>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Прежние экраны</div>
+    <a class="nav-item" href="/ultimate.html"><i class="nav-dot"></i><span>Ultimate</span></a>
+    <a class="nav-item" href="/control.html"><i class="nav-dot"></i><span>Control</span></a>
+    <a class="nav-item" href="/classic.html"><i class="nav-dot"></i><span>Classic</span></a>
   </div>
 </aside>
 
@@ -957,10 +1095,21 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
 <section class="view" id="viewHome">
 
   <section class="hero">
-    <div>
-      <div class="eyebrow">Autonomous Engineering Core</div>
-      <h1 class="wordmark">AZRAIL</h1>
-      <p class="tagline">Intelligence That <span>Moves the Planet</span></p>
+    <div class="hero-grid">
+      <div>
+        <div class="eyebrow">Autonomous Engineering Core</div>
+        <h1 class="wordmark">AZRAIL</h1>
+        <p class="tagline">Intelligence That <span>Moves the Planet</span></p>
+      </div>
+      <!-- Планета. Свечение — псевдоэлемент в стилях, а не ещё один узел:
+           шапка обязана оставаться короткой, это закреплено тестом и
+           заведено не случайно — предыдущая версия занимала здесь весь
+           экран, и до поля ввода на телефоне надо было долистывать.
+           aria-hidden: это знак, а не сведения. Всё, что показывает
+           планета, есть текстом слева и в панели состояния. -->
+      <div class="globe-stage" aria-hidden="true">
+        <canvas id="globe"></canvas>
+      </div>
     </div>
   </section>
 
@@ -1241,6 +1390,283 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     <div class="row">
       <span class="label">Полная панель</span>
       <p class="note">Формы для операций, которые пока не выразить словами: ветки, репозитории, параметры запуска. <a href="/classic.html">Открыть</a></p>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       СТУДИИ И ЛАБОРАТОРИИ.
+
+       Девять агентов бэкенда получают человеческие имена — те же, что
+       были в /control.html. Разница в том, что здесь рядом с каждой
+       студией видно, ЧЕМ она может воспользоваться прямо сейчас:
+       /api/agents отдаёт возможности, /api/tools — исполнимые
+       инструменты. Студия, все инструменты которой недоступны, помечена
+       серым, а не выдаётся за рабочую.
+       ═══════════════════════════════════════════════════════════════ -->
+  <section class="view hidden" id="viewStudios">
+    <div class="view-head">
+      <button class="view-back" data-back aria-label="Назад к задаче">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <h2 class="view-title">Студии и лаборатории</h2>
+    </div>
+    <p class="note" id="studiosNote">Загружаю каталог…</p>
+    <div class="mod-grid" id="studiosGrid"></div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       ПРОЕКТ: МЕТРИКИ, КОПИИ, СПАСЕНИЕ МИССИЙ.
+
+       Всё это существовало на сервере и не было доступно с главного
+       экрана: /api/metrics, /api/backups, /api/backups/restore,
+       /api/mission/recover. Резервная копия, которую невозможно снять
+       из интерфейса, не защищает ни от чего.
+       ═══════════════════════════════════════════════════════════════ -->
+  <section class="view hidden" id="viewProject">
+    <div class="view-head">
+      <button class="view-back" data-back aria-label="Назад к задаче">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <h2 class="view-title">Обзор проекта</h2>
+    </div>
+
+    <div class="mod-card">
+      <h3>Проект</h3>
+      <p class="note">Один идентификатор на все разделы: метрики, копии, память и версии берут его отсюда. У участника без прав администратора он закреплён за аккаунтом и сменить его нельзя.</p>
+      <div class="row">
+        <label class="label" for="projectId">Идентификатор</label>
+        <input type="text" id="projectId" autocomplete="off" spellcheck="false">
+        <button class="mini" id="projectSave">Применить</button>
+      </div>
+    </div>
+
+    <div class="mod-card">
+      <h3>Метрики</h3>
+      <p class="note">Считается по фактическим записям вызовов. Вызовы с неизвестной стоимостью показаны отдельно — неизвестное здесь не приравнивается к нулю.</p>
+      <div class="row"><button class="mini" id="metricsBtn">Обновить</button></div>
+      <div class="mod-stat" id="metricsStat"></div>
+      <div class="mod-card" id="metricsMissions" style="margin:var(--s4) 0 0"></div>
+    </div>
+
+    <div class="mod-card">
+      <h3>Резервные копии</h3>
+      <p class="note">Копия снимает файлы рабочей области проекта. Восстановление кладёт их в проект-приёмник — по умолчанию в тот же.</p>
+      <div class="row">
+        <button class="mini" id="backupBtn">Снять копию</button>
+        <button class="mini" id="backupListBtn">Показать список</button>
+      </div>
+      <div class="row">
+        <label class="label" for="backupTarget">Проект-приёмник</label>
+        <input type="text" id="backupTarget" placeholder="по умолчанию — текущий" autocomplete="off" spellcheck="false">
+      </div>
+      <div id="backupList"></div>
+    </div>
+
+    <div class="mod-card">
+      <h3>Спасение миссии</h3>
+      <p class="note">Миссия, чей объект был выселен, остаётся в статусе «выполняется» и не движется. Крон подбирает такие каждые десять минут; эта кнопка — то же самое вручную и сразу.</p>
+      <div class="row">
+        <label class="label" for="recoverId">Идентификатор миссии</label>
+        <input type="text" id="recoverId" autocomplete="off" spellcheck="false">
+        <button class="mini" id="recoverBtn">Продолжить</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       ПАМЯТЬ И ВЕРСИИ.
+
+       /api/projects/:id/history, /memory, /versions и восстановление
+       версии были написаны и не подключены ни к одному экрану. Факт,
+       который агент запомнил про проект, но который нельзя ни увидеть,
+       ни забыть, — это не память, а неуправляемое накопление.
+       ═══════════════════════════════════════════════════════════════ -->
+  <section class="view hidden" id="viewMemory">
+    <div class="view-head">
+      <button class="view-back" data-back aria-label="Назад к задаче">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <h2 class="view-title">Память и версии</h2>
+    </div>
+    <p class="note" id="memProject"></p>
+
+    <div class="mod-card">
+      <h3>Что агент помнит о проекте</h3>
+      <p class="note">Факты, выведенные из выполненных задач. «Забыть» удаляет запись — это единственный способ отменить неверный вывод, сделанный один раз и применяемый дальше ко всему.</p>
+      <div class="row"><button class="mini" id="memBtn">Обновить</button></div>
+      <div id="memList"></div>
+    </div>
+
+    <div class="mod-card">
+      <h3>Версии файлов</h3>
+      <p class="note">Каждая запись файла версионируется. Восстановление возвращает содержимое в рабочую область, не трогая остальные файлы.</p>
+      <div class="row"><button class="mini" id="versBtn">Обновить</button></div>
+      <div id="versList"></div>
+      <div class="out hidden" id="versOut"></div>
+    </div>
+
+    <div class="mod-card">
+      <h3>Журнал проекта</h3>
+      <p class="note">Последовательность выполненных задач с их итогом.</p>
+      <div class="row"><button class="mini" id="histBtn">Обновить</button></div>
+      <div id="projHistList"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       МОДЕЛИ И МАРШРУТ.
+
+       Политика маршрутизации (/api/routing-settings) решает, разрешены
+       ли платные модели и какой на них месячный бюджет. Она уже влияла
+       на каждый запрос — и была невидима: модель «недоступна», причина
+       неизвестна. Живой каталог (/api/model-catalog) показывает, что
+       Cloudflare отдаёт на самом деле, а не что записано в реестре.
+       ═══════════════════════════════════════════════════════════════ -->
+  <section class="view hidden" id="viewModels">
+    <div class="view-head">
+      <button class="view-back" data-back aria-label="Назад к задаче">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <h2 class="view-title">Модели и маршрут</h2>
+    </div>
+
+    <div class="mod-card">
+      <h3>Политика маршрутизации</h3>
+      <p class="note" id="policyNote">Загружаю…</p>
+      <div class="mod-stat" id="policyStat"></div>
+      <div class="row">
+        <label class="label" for="policyThird">Сторонние модели</label>
+        <select id="policyThird" disabled>
+          <option value="off">Выключены — только модели Cloudflare</option>
+          <option value="on">Включены — доступны anthropic/*, openai/*</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="label" for="policyBudget">Бюджет, USD в месяц</label>
+        <input type="number" id="policyBudget" min="0" max="1000" step="0.01" disabled>
+        <button class="mini" id="policySave" disabled>Сохранить</button>
+        <p class="note" id="policyHint">Менять политику может только владелец.</p>
+      </div>
+    </div>
+
+    <div class="mod-card">
+      <h3>Живой каталог Cloudflare</h3>
+      <p class="note">Список моделей, которые аккаунт видит на самом деле. Расхождение с реестром означает, что слаг переименован или отключён у провайдера.</p>
+      <div class="row"><button class="mini" id="catalogBtn">Загрузить</button></div>
+      <div class="out hidden" id="catalogOut"></div>
+    </div>
+
+    <div class="mod-card">
+      <h3>Реестр моделей</h3>
+      <p class="note">Тот же список, что в выборе модели чата. Недоступные показаны с причиной.</p>
+      <div class="mod-grid" id="modelsGrid"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       АДМИНИСТРИРОВАНИЕ.
+
+       Пункт меню появляется только у роли admin — и не потому, что
+       остальным «не надо показывать», а потому что сервер откажет: все
+       эти маршруты требуют администратора. Кнопка, гарантированно
+       возвращающая 403, — обещание возможности, которой нет.
+       ═══════════════════════════════════════════════════════════════ -->
+  <section class="view hidden" id="viewAdmin">
+    <div class="view-head">
+      <button class="view-back" data-back aria-label="Назад к задаче">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <h2 class="view-title">Администрирование</h2>
+    </div>
+
+    <div class="mod-card">
+      <h3>Аккаунты доступа</h3>
+      <p class="note">Ключ показывается один раз при создании и больше не выдаётся — сохраните его сразу.</p>
+      <div class="row">
+        <label class="label" for="accName">Имя</label>
+        <input type="text" id="accName" autocomplete="off">
+        <select id="accRole">
+          <option value="editor">Участник</option>
+          <option value="viewer">Просмотр</option>
+          <option value="admin">Владелец</option>
+        </select>
+        <input type="number" id="accDays" value="30" min="1" max="3650">
+        <button class="mini" id="accCreate">Создать</button>
+      </div>
+      <div class="out hidden" id="accSecret"></div>
+      <div class="row"><button class="mini" id="accList">Показать аккаунты</button></div>
+      <div id="accounts"></div>
+    </div>
+
+    <div class="mod-card">
+      <h3>Разрешения проекта</h3>
+      <p class="note">Возможности, опасные по последствиям: работа с репозиторием, публикация, запуск в песочнице, прогон тестов. Выдаются проекту, а не аккаунту.</p>
+      <div class="row">
+        <label class="label" for="permCap">Возможность</label>
+        <select id="permCap">
+          <option value="git">git — работа с репозиторием</option>
+          <option value="deploy">deploy — публикация</option>
+          <option value="sandbox">sandbox — запуск команд</option>
+          <option value="qa">qa — прогон тестов</option>
+        </select>
+        <button class="mini" id="permAllow">Выдать</button>
+        <button class="mini" id="permDeny">Отозвать</button>
+        <button class="mini" id="permList">Показать текущие</button>
+        <p class="note">Применяется к проекту из раздела «Обзор проекта».</p>
+      </div>
+      <div id="permissions"></div>
+    </div>
+
+    <div class="mod-card">
+      <h3>Владелец ресурса</h3>
+      <p class="note">Кому принадлежит проект, переписка или загрузка. От этого зависит, кто вообще их увидит.</p>
+      <div class="row">
+        <label class="label" for="ownKind">Ресурс</label>
+        <select id="ownKind">
+          <option value="project">Проект</option>
+          <option value="conversation">Переписка</option>
+          <option value="upload">Загрузка</option>
+        </select>
+        <input type="text" id="ownResource" placeholder="идентификатор ресурса" autocomplete="off">
+        <input type="text" id="ownAccount" placeholder="идентификатор аккаунта" autocomplete="off">
+        <button class="mini" id="ownAssign">Назначить</button>
+      </div>
+    </div>
+
+    <div class="mod-card">
+      <h3>Тарифы и бюджеты</h3>
+      <p class="note">Тариф берётся из договора провайдера и задаётся в micro-USD за миллион токенов: 1 USD = 1 000 000 micro-USD. Без тарифа стоимость вызова остаётся неизвестной и в ноль не превращается.</p>
+      <div class="row">
+        <label class="label" for="priceModel">Модель</label>
+        <input type="text" id="priceModel" placeholder="@cf/meta/llama-3.3-70b-instruct-fp8-fast" autocomplete="off" spellcheck="false">
+        <input type="number" id="priceIn" placeholder="вход" min="0" step="1">
+        <input type="number" id="priceOut" placeholder="выход" min="0" step="1">
+        <button class="mini" id="priceSave">Сохранить тариф</button>
+      </div>
+      <div class="row">
+        <label class="label" for="limitScope">Область бюджета</label>
+        <input type="text" id="limitScope" value="global" autocomplete="off" spellcheck="false">
+        <input type="number" id="limitUsd" value="1" min="0.01" max="1000" step="0.01">
+        <button class="mini" id="limitSave">Сохранить бюджет</button>
+        <p class="note">Область: global, project:ID, mission:ID или account:ID.</p>
+      </div>
+      <div class="row"><button class="mini" id="billingList">Показать тарифы и лимиты</button></div>
+      <div id="billing"></div>
     </div>
   </section>
 
@@ -3617,7 +4043,8 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
   /* ─── Экраны ────────────────────────────────────────────────────────
      Один раздел за раз, во всю ширину. Раньше всё лежало одной лентой:
      чтобы дойти до песочницы, приходилось прокручивать чужие разделы. */
-  var VIEWS = ['viewHome', 'viewChat', 'viewLive', 'viewSandbox', 'viewHistory', 'viewOps', 'viewSkills'];
+  var VIEWS = ['viewHome', 'viewChat', 'viewLive', 'viewSandbox', 'viewHistory', 'viewOps', 'viewSkills',
+               'viewStudios', 'viewProject', 'viewMemory', 'viewModels', 'viewAdmin'];
 
   function openView(id) {
     if (VIEWS.indexOf(id) === -1) id = 'viewHome';
@@ -3771,7 +4198,936 @@ footer { padding: var(--s5) var(--s6); color: #5b626d; font-size: 11px; font-fam
     })
     .catch(function () { /* без токена список недоступен — не ошибка */ });
 
+  /* ═══════════════════════════════════════════════════════════════════
+     ПЛАНЕТА.
+
+     Подпись «Intelligence That Moves the Planet» стояла над пустотой.
+     Здесь она нарисована: каркасный шар с меридианами и параллелями,
+     три орбитальных кольца с разными наклонами и спутник на каждом.
+
+     Canvas 2D, ни одной зависимости, ни одного сетевого запроса —
+     страница остаётся самодостаточной (это её свойство проверяется
+     тестами и терять его ради украшения нельзя).
+
+     СКОРОСТЬ ВЫБРАНА МАЛЕНЬКОЙ НАМЕРЕННО: 0.055 рад/с — полный оборот
+     примерно за две минуты. Движение в углу экрана, заметное боковым
+     зрением, перетягивает внимание с поля ввода, ради которого сюда и
+     приходят. Кольца дрейфуют ещё медленнее.
+
+     При выключенном движении (переключатель в «Служебном» или системная
+     настройка prefers-reduced-motion) шар рисуется ОДИН раз в статичной
+     позе. Убирать его совсем нельзя: пустой прямоугольник на месте знака
+     читается как незагрузившаяся картинка, а не как уважение к настройке.
+     ═══════════════════════════════════════════════════════════════════ */
+  (function () {
+    var canvas = $('globe');
+    if (!canvas || typeof canvas.getContext !== 'function') return;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    var TILT = -0.36;   // наклон оси мира к наблюдателю
+    var SPIN = 0.055;   // рад/с — полный оборот ≈ 114 секунд
+    var W = 0, H = 0, R = 0, CX = 0, CY = 0;
+
+    // Кольца: радиус в долях радиуса планеты, наклон плоскости, угол узла,
+    // скорость дрейфа узла, стартовое положение спутника и его скорость.
+    var RINGS = [
+      { r: 1.28, inc:  1.19, node: 0.00, drift:  0.021, sat: 0.31, speed:  0.20, rgb: '152,112,255' },
+      { r: 1.50, inc: -0.93, node: 1.90, drift: -0.015, sat: 2.10, speed: -0.14, rgb: '118,185,255' },
+      { r: 1.74, inc:  0.41, node: 3.40, drift:  0.009, sat: 4.40, speed:  0.09, rgb: '203,186,255' }
+    ];
+
+    // Узлы на поверхности — [широта, долгота] в радианах. Расставлены
+    // руками, а не случайно: случайные точки при каждой загрузке дают
+    // разный знак бренда.
+    var NODES = [
+      [0.86, 0.30], [0.19, -1.25], [-0.42, 0.72], [0.55, 2.45],
+      [-0.12, 3.05], [0.33, -2.35], [-0.66, -0.55], [0.05, 1.55]
+    ];
+
+    /* Наклон всей сцены к наблюдателю. Применяется последним, поэтому и
+       шар, и кольца наклоняются согласованно. */
+    function tilt(x, y, z) {
+      var c = Math.cos(TILT), s = Math.sin(TILT);
+      return { x: x, y: y * c - z * s, z: y * s + z * c };
+    }
+
+    function sphere(lat, lon, rad) {
+      var cl = Math.cos(lat);
+      return tilt(cl * Math.sin(lon) * rad, Math.sin(lat) * rad, cl * Math.cos(lon) * rad);
+    }
+
+    function ringPoint(ring, a, node) {
+      var x = Math.cos(a) * ring.r, z0 = Math.sin(a) * ring.r;
+      var y = -z0 * Math.sin(ring.inc), z1 = z0 * Math.cos(ring.inc);
+      var cn = Math.cos(node), sn = Math.sin(node);
+      return tilt(x * cn + z1 * sn, y, -x * sn + z1 * cn);
+    }
+
+    /* Линия рисуется ДВУМЯ проходами — задним и передним, — а между ними
+       закрашивается тело планеты. Так кольцо уходит за шар и выходит
+       из-за него, вместо того чтобы всегда лежать поверх. */
+    function polyline(points, front, rgb, alpha, width) {
+      ctx.beginPath();
+      var pen = false;
+      for (var i = 0; i < points.length; i++) {
+        var p = points[i];
+        if ((p.z >= 0) !== front) { pen = false; continue; }
+        var sx = CX + p.x * R, sy = CY - p.y * R;
+        if (pen) ctx.lineTo(sx, sy); else { ctx.moveTo(sx, sy); pen = true; }
+      }
+      ctx.lineWidth = width;
+      ctx.strokeStyle = 'rgba(' + rgb + ',' + alpha + ')';
+      ctx.stroke();
+    }
+
+    function drawRing(ring, t, front) {
+      var node = ring.node + t * ring.drift;
+      var pts = [], i;
+      for (i = 0; i <= 96; i++) pts.push(ringPoint(ring, i / 96 * Math.PI * 2, node));
+      polyline(pts, front, ring.rgb, front ? 0.40 : 0.13, front ? 1.1 : 0.9);
+
+      var s = ringPoint(ring, ring.sat + t * ring.speed, node);
+      if ((s.z >= 0) !== front) return;
+      var sx = CX + s.x * R, sy = CY - s.y * R;
+      if (front) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, 6.5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(' + ring.rgb + ',.13)';
+        ctx.fill();
+      }
+      ctx.beginPath();
+      ctx.arc(sx, sy, front ? 2.4 : 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(' + ring.rgb + ',' + (front ? 0.95 : 0.28) + ')';
+      ctx.fill();
+    }
+
+    function fit() {
+      var rect = canvas.getBoundingClientRect();
+      // Потолок на плотности пикселей: на телефоне с dpr 3 и выше выигрыш
+      // в чёткости уже не виден, а площадь заливки растёт вдевятеро.
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      W = Math.max(1, Math.round(rect.width || canvas.clientWidth || 300));
+      H = Math.max(1, Math.round(rect.height || canvas.clientHeight || 300));
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      CX = W / 2; CY = H / 2;
+      // 1.74 — внешнее кольцо, плюс запас на свечение спутника (6.5 px).
+      R = Math.min(W, H) / 2 / 1.86;
+    }
+
+    function render(t) {
+      if (!R) return;
+      var yaw = t * SPIN, i, lat, lon, pts;
+      ctx.clearRect(0, 0, W, H);
+
+      for (i = 0; i < RINGS.length; i++) drawRing(RINGS[i], t, false);
+
+      var g = ctx.createRadialGradient(CX - R * 0.36, CY - R * 0.42, R * 0.08, CX, CY, R);
+      g.addColorStop(0, 'rgba(52,40,88,.96)');
+      g.addColorStop(0.58, 'rgba(16,15,28,.96)');
+      g.addColorStop(1, 'rgba(4,4,8,.99)');
+      ctx.beginPath();
+      ctx.arc(CX, CY, R, 0, Math.PI * 2);
+      ctx.fillStyle = g;
+      ctx.fill();
+
+      for (lat = -60; lat <= 60; lat += 30) {
+        pts = [];
+        for (i = 0; i <= 72; i++) pts.push(sphere(lat * Math.PI / 180, i / 72 * Math.PI * 2 + yaw, 1));
+        polyline(pts, true, '171,153,238', lat === 0 ? 0.30 : 0.15, 1);
+      }
+      for (lon = 0; lon < 180; lon += 30) {
+        pts = [];
+        for (i = 0; i <= 48; i++) pts.push(sphere(-Math.PI / 2 + i / 48 * Math.PI, lon * Math.PI / 180 + yaw, 1));
+        polyline(pts, true, '171,153,238', 0.15, 1);
+      }
+
+      ctx.beginPath();
+      ctx.arc(CX, CY, R, 0, Math.PI * 2);
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = 'rgba(203,186,255,.34)';
+      ctx.stroke();
+
+      for (i = 0; i < NODES.length; i++) {
+        var p = sphere(NODES[i][0], NODES[i][1] + yaw, 1.004);
+        if (p.z < 0) continue;
+        var nx = CX + p.x * R, ny = CY - p.y * R;
+        var pulse = 0.55 + 0.45 * Math.sin(t * 1.05 + i);
+        ctx.beginPath();
+        ctx.arc(nx, ny, 4.6, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(152,112,255,' + (0.08 + 0.14 * pulse) + ')';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(nx, ny, 1.9, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(219,207,255,' + (0.34 + 0.46 * p.z) + ')';
+        ctx.fill();
+      }
+
+      for (i = 0; i < RINGS.length; i++) drawRing(RINGS[i], t, true);
+    }
+
+    var clock = 2.2;  // статичная поза — не вырожденная: кольца видны
+    var last = 0, raf = 0;
+
+    function running() {
+      return document.documentElement.classList.contains('motion') && !document.hidden;
+    }
+
+    function frame(now) {
+      raf = 0;
+      // Кадр после длинной паузы (вкладка была свёрнута) не должен
+      // проматывать планету рывком — отсюда потолок шага.
+      var dt = last ? Math.min((now - last) / 1000, 0.2) : 0;
+      last = now;
+      clock += dt;
+      render(clock);
+      if (running()) raf = window.requestAnimationFrame(frame);
+    }
+
+    function kick() {
+      if (raf) return;
+      last = 0;
+      if (running() && typeof window.requestAnimationFrame === 'function') {
+        raf = window.requestAnimationFrame(frame);
+      } else {
+        render(clock);
+      }
+    }
+
+    fit();
+    kick();
+
+    window.addEventListener('resize', function () {
+      fit();
+      if (!raf) render(clock);
+    });
+    document.addEventListener('visibilitychange', kick);
+    // Переключатель «Движение» меняет класс на <html>. Наблюдатель здесь,
+    // а не вызов из applyMotion(): планета не должна требовать, чтобы о
+    // ней помнил чужой обработчик.
+    if (typeof window.MutationObserver === 'function') {
+      new window.MutationObserver(kick).observe(document.documentElement, {
+        attributes: true, attributeFilter: ['class']
+      });
+    }
+  })();
+
+
+  /* ═══════════════════════════════════════════════════════════════════
+     МОДУЛИ: СТУДИИ, ПРОЕКТ, ПАМЯТЬ, МОДЕЛИ, АДМИНИСТРИРОВАНИЕ.
+
+     Всё, что ниже, обращается к маршрутам, которые сервер отдавал в
+     пустоту: /api/metrics, /api/backups, /api/mission/recover,
+     /api/projects/:id/{memory,versions,history}, /api/routing-settings,
+     /api/model-catalog и весь /api/admin/*. Ни одной заглушки: каждая
+     кнопка ходит в существующий обработчик, и если тот ответит отказом,
+     показывается его текст, а не «что-то пошло не так».
+     ═══════════════════════════════════════════════════════════════════ */
+
+  var myRole = '';
+
+  function modClear(box) { while (box.firstChild) box.removeChild(box.firstChild); }
+
+  /* Узлами, а не innerHTML. В этих списках содержимое приходит с сервера
+     (имена аккаунтов, ключи памяти, тексты ошибок), и подстановка строкой
+     здесь была бы дырой. Это правило в проекте закреплено тестом. */
+  function modItem(box, title, meta, actions) {
+    var row = document.createElement('div');
+    row.className = 'mod-item';
+    var b = document.createElement('b');
+    b.textContent = title;
+    row.appendChild(b);
+    if (meta) {
+      var c = document.createElement('code');
+      c.textContent = meta;
+      row.appendChild(c);
+    }
+    if (actions && actions.length) {
+      var push = document.createElement('div');
+      push.className = 'push';
+      actions.forEach(function (a) {
+        var btn = document.createElement('button');
+        btn.className = 'mini';
+        btn.textContent = a.label;
+        btn.addEventListener('click', a.run);
+        push.appendChild(btn);
+      });
+      row.appendChild(push);
+    }
+    box.appendChild(row);
+    return row;
+  }
+
+  function modEmpty(box, text) {
+    modClear(box);
+    var p = document.createElement('p');
+    p.className = 'mod-empty';
+    p.textContent = text;
+    box.appendChild(p);
+  }
+
+  function modStat(box, label, value, cls) {
+    var d = document.createElement('div');
+    var b = document.createElement('b');
+    b.textContent = String(value);
+    if (cls) b.className = cls;
+    var s = document.createElement('span');
+    s.textContent = label;
+    d.appendChild(b);
+    d.appendChild(s);
+    box.appendChild(d);
+  }
+
+  /* Отсутствие токена — не ошибка, а незаполненная настройка. Разница
+     важна: сообщение об ошибке отправляет чинить то, что не сломано. */
+  function noToken(box) {
+    if (token) return false;
+    modEmpty(box, 'Нужен сохранённый токен — раздел «Служебное».');
+    return true;
+  }
+
+  function modFail(box, e) {
+    modEmpty(box, (e && e.message) ? e.message : 'Запрос не выполнен.');
+  }
+
+
+  /* ─── Студии и лаборатории ────────────────────────────────────────── */
+
+  // Человеческие имена агентов. Тот же словарь, что был в /control.html:
+  // он переехал сюда целиком, чтобы каталог не жил на двух страницах с
+  // расходящимися названиями.
+  var STUDIO_NAMES = {
+    answer: 'Аналитическая студия',
+    architect: 'Архитектурная студия',
+    code: 'Студия разработки',
+    ui: 'Дизайн-студия',
+    git: 'Управление версиями',
+    deploy: 'Лаборатория публикации',
+    security: 'Лаборатория безопасности',
+    qa: 'Лаборатория качества',
+    evolution: 'Лаборатория развития'
+  };
+
+  var studiosLoaded = false;
+
+  function loadStudios() {
+    if (studiosLoaded) return;
+    var grid = $('studiosGrid');
+    if (noToken(grid)) { $('studiosNote').textContent = ''; return; }
+    api('/api/agents')
+      .then(function (d) {
+        var agents = (d && d.agents) || [];
+        studiosLoaded = true;
+        modClear(grid);
+        $('studioCount').textContent = String(agents.length);
+        agents.forEach(function (a) {
+          var tile = document.createElement('div');
+          tile.className = 'mod-tile live';
+          var b = document.createElement('b');
+          b.textContent = STUDIO_NAMES[a.id] || a.name || a.id;
+          var s = document.createElement('span');
+          s.textContent = Array.isArray(a.capabilities) && a.capabilities.length
+            ? a.capabilities.join(', ')
+            : 'без объявленных возможностей';
+          var tag = document.createElement('i');
+          tag.className = 'tag';
+          tag.textContent = a.id || '—';
+          tile.appendChild(b);
+          tile.appendChild(s);
+          tile.appendChild(tag);
+          grid.appendChild(tile);
+        });
+
+        // Расхождение реестров показывается, а не замалчивается: студия из
+        // словаря, которой нет на сервере, означает, что агент отключён или
+        // переименован, — и это стоит увидеть здесь, а не по отказу задачи.
+        var known = {};
+        agents.forEach(function (a) { known[a.id] = true; });
+        var missing = Object.keys(STUDIO_NAMES).filter(function (k) { return !known[k]; });
+        missing.forEach(function (k) {
+          var tile = document.createElement('div');
+          tile.className = 'mod-tile off';
+          var b = document.createElement('b');
+          b.textContent = STUDIO_NAMES[k];
+          var s = document.createElement('span');
+          s.textContent = 'Не зарегистрирована на сервере — задачи в неё не пойдут.';
+          var tag = document.createElement('i');
+          tag.className = 'tag';
+          tag.textContent = k;
+          tile.appendChild(b);
+          tile.appendChild(s);
+          tile.appendChild(tag);
+          grid.appendChild(tile);
+        });
+
+        $('studiosNote').textContent = 'Зарегистрировано студий: ' + agents.length +
+          (missing.length ? '. Не отвечает: ' + missing.length + '.' : '.') +
+          ' Возможности объявляет сам агент; разрешения проекта проверяются при выполнении.';
+      })
+      .catch(function (e) {
+        $('studiosNote').textContent = '';
+        modFail(grid, e);
+      });
+  }
+
+  onViewOpen('viewStudios', loadStudios);
+
+
+  /* ─── Проект: идентификатор, метрики, копии, спасение ──────────────── */
+
+  onViewOpen('viewProject', function () {
+    $('projectId').value = currentProject;
+    if (!$('backupTarget').value) $('backupTarget').placeholder = 'по умолчанию — ' + currentProject;
+  });
+
+  $('projectSave').addEventListener('click', function () {
+    var v = $('projectId').value.trim();
+    if (!v) { toast('Идентификатор проекта не может быть пустым.'); return; }
+    if (v.length > 200) { toast('Слишком длинный идентификатор.'); return; }
+    currentProject = v;
+    local.set('azrail_project', v);
+    $('backupTarget').placeholder = 'по умолчанию — ' + v;
+    toast('Проект: ' + v);
+  });
+
+  function loadMetrics() {
+    var box = $('metricsMissions');
+    if (noToken(box)) { modClear($('metricsStat')); return; }
+    api('/api/metrics?projectId=' + encodeURIComponent(currentProject))
+      .then(function (d) {
+        var m = (d && d.models) || {};
+        var stat = $('metricsStat');
+        modClear(stat);
+        modStat(stat, 'вызовов модели', m.calls || 0);
+        modStat(stat, 'токенов на вход', m.input_tokens || 0);
+        modStat(stat, 'токенов на выход', m.output_tokens || 0);
+        modStat(stat, 'учтено, USD', ((m.measured_micro_usd || 0) / 1e6).toFixed(4));
+        // Неизвестная стоимость — отдельная цифра, а не ноль. Вызов без
+        // тарифа стоил денег; показать его нулём значит соврать в отчёте.
+        modStat(stat, 'стоимость неизвестна', m.unknown_cost_calls || 0,
+          (m.unknown_cost_calls ? 'mod-bad' : ''));
+        modStat(stat, 'среднее время, мс', m.mean_ms == null ? '—' : Math.round(m.mean_ms));
+
+        modClear(box);
+        var h = document.createElement('h3');
+        h.textContent = 'Миссии по статусам · учёт: ' + (d.metering || 'off');
+        box.appendChild(h);
+        var rows = (d && d.missions) || [];
+        if (!rows.length) {
+          var p = document.createElement('p');
+          p.className = 'mod-empty';
+          p.textContent = 'Миссий в этом проекте ещё не было.';
+          box.appendChild(p);
+        } else {
+          rows.forEach(function (r) { modItem(box, String(r.status), 'записей: ' + r.count); });
+        }
+      })
+      .catch(function (e) { modClear($('metricsStat')); modFail(box, e); });
+  }
+
+  $('metricsBtn').addEventListener('click', loadMetrics);
+  onViewOpen('viewProject', loadMetrics);
+
+  function restoreBackup(backupId) {
+    var target = $('backupTarget').value.trim() || currentProject;
+    if (!window.confirm('Восстановить копию ' + backupId + ' в проект ' + target + '? Файлы проекта-приёмника будут перезаписаны.')) return;
+    api('/api/backups/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: currentProject, backupId: backupId, targetProjectId: target })
+    })
+      .then(function (r) { toast('Восстановлено файлов: ' + r.restored + ' → ' + r.projectId); })
+      .catch(function (e) { toast(e.message); });
+  }
+
+  function loadBackups() {
+    var box = $('backupList');
+    if (noToken(box)) return;
+    api('/api/backups?projectId=' + encodeURIComponent(currentProject))
+      .then(function (d) {
+        var list = (d && d.backups) || [];
+        modClear(box);
+        if (!list.length) { modEmpty(box, 'Копий этого проекта пока нет.'); return; }
+        list.forEach(function (b) {
+          var when = b.created_at ? new Date(b.created_at).toLocaleString('ru-RU') : 'без даты';
+          modItem(box, when, b.id + ' · файлов: ' + b.file_count, [
+            { label: 'Восстановить', run: function () { restoreBackup(b.id); } }
+          ]);
+        });
+      })
+      .catch(function (e) { modFail(box, e); });
+  }
+
+  $('backupListBtn').addEventListener('click', loadBackups);
+
+  $('backupBtn').addEventListener('click', function () {
+    var btn = $('backupBtn');
+    btn.disabled = true;
+    api('/api/backups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: currentProject })
+    })
+      .then(function (r) { toast('Копия снята: ' + r.id + ' · файлов: ' + r.files); loadBackups(); })
+      .catch(function (e) { toast(e.message); })
+      .then(function () { btn.disabled = false; });
+  });
+
+  $('recoverBtn').addEventListener('click', function () {
+    var id = $('recoverId').value.trim();
+    if (!id) { toast('Укажите идентификатор миссии.'); return; }
+    api('/api/mission/recover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ missionId: id })
+    })
+      .then(function (r) { toast(r.resumed ? 'Миссия поставлена на продолжение.' : (r.reason || 'Продолжать нечего.')); })
+      .catch(function (e) { toast(e.message); });
+  });
+
+
+  /* ─── Память, версии, журнал проекта ──────────────────────────────── */
+
+  var MEMORY_LABELS = {
+    architecture_decision: 'архитектурное решение',
+    code_style: 'стиль кода',
+    tech_choice: 'выбор технологии',
+    known_issue: 'известная проблема',
+    preference: 'предпочтение'
+  };
+
+  onViewOpen('viewMemory', function () {
+    $('memProject').textContent = 'Проект: ' + currentProject + '. Сменить — в разделе «Обзор проекта».';
+  });
+
+  function forgetFact(category, key) {
+    if (!window.confirm('Забыть факт «' + key + '»? Отменить это нельзя.')) return;
+    api('/api/projects/' + encodeURIComponent(currentProject) +
+        '/memory/' + encodeURIComponent(category) + '/' + encodeURIComponent(key),
+        { method: 'DELETE' })
+      .then(function () { toast('Факт удалён.'); loadMemory(); })
+      .catch(function (e) { toast(e.message); });
+  }
+
+  function loadMemory() {
+    var box = $('memList');
+    if (noToken(box)) return;
+    api('/api/projects/' + encodeURIComponent(currentProject) + '/memory')
+      .then(function (d) {
+        var facts = (d && d.data) || [];
+        modClear(box);
+        if (!facts.length) { modEmpty(box, 'Про этот проект агент пока ничего не запомнил.'); return; }
+        facts.forEach(function (f) {
+          var label = MEMORY_LABELS[f.category] || f.category;
+          modItem(box, f.key, label + ' · ' + f.value +
+            (f.sourceAgent ? ' · от ' + f.sourceAgent : ''), [
+            { label: 'Забыть', run: function () { forgetFact(f.category, f.key); } }
+          ]);
+        });
+      })
+      .catch(function (e) { modFail(box, e); });
+  }
+
+  $('memBtn').addEventListener('click', loadMemory);
+  onViewOpen('viewMemory', loadMemory);
+
+  function restoreVersion(versionId) {
+    api('/api/projects/' + encodeURIComponent(currentProject) +
+        '/versions/' + encodeURIComponent(versionId) + '/restore', { method: 'POST' })
+      .then(function (r) {
+        var files = (r && r.data && r.data.files) || [];
+        // Предупреждение о неполном восстановлении приходит верхним полем
+        // ответа и показывается как есть: проект, восстановленный
+        // наполовину, выглядит целым и не работает.
+        toast((r && r.warning) ? r.warning : ('Версия возвращена, файлов: ' + files.length));
+        // Восстановление НИЧЕГО не перезаписывает — оно отдаёт содержимое
+        // версии обратно. Показываем состав, чтобы это было очевидно, а не
+        // выглядело как молча применённый откат.
+        var out = $('versOut');
+        out.classList.remove('hidden');
+        out.textContent = (r && r.warning ? r.warning + '\n\n' : '') +
+          (files.length
+            ? files.map(function (f) { return f.path + '  (' + (f.content || '').length + ' симв.)'; }).join('\n')
+            : 'Версия не содержит файлов.');
+      })
+      .catch(function (e) {
+        var out = $('versOut');
+        out.classList.remove('hidden');
+        out.textContent = e.message;
+      });
+  }
+
+  function loadVersions() {
+    var box = $('versList');
+    if (noToken(box)) return;
+    api('/api/projects/' + encodeURIComponent(currentProject) + '/versions')
+      .then(function (d) {
+        var list = (d && d.data) || [];
+        modClear(box);
+        if (!list.length) { modEmpty(box, 'Версий этого проекта пока нет.'); return; }
+        list.forEach(function (v) {
+          modItem(box, 'v' + v.versionNumber,
+            (v.summary || 'без описания') +
+            (v.createdByAgent ? ' · ' + v.createdByAgent : '') +
+            (v.createdAt ? ' · ' + new Date(v.createdAt).toLocaleString('ru-RU') : ''), [
+            { label: 'Восстановить', run: function () { restoreVersion(v.id); } }
+          ]);
+        });
+      })
+      .catch(function (e) { modFail(box, e); });
+  }
+
+  $('versBtn').addEventListener('click', loadVersions);
+  onViewOpen('viewMemory', loadVersions);
+
+  function loadProjectHistory() {
+    var box = $('projHistList');
+    if (noToken(box)) return;
+    api('/api/projects/' + encodeURIComponent(currentProject) + '/history')
+      .then(function (d) {
+        var list = (d && d.data) || [];
+        modClear(box);
+        if (!list.length) { modEmpty(box, 'Задач по этому проекту ещё не было.'); return; }
+        list.forEach(function (t) {
+          var when = t.started_at ? new Date(t.started_at).toLocaleString('ru-RU') : '';
+          modItem(box, (t.agent || 'агент') + ' · ' + (t.intent || 'задача'),
+            (t.status || '') + ' · ' + (t.output_summary || t.error || 'без итога') +
+            (when ? ' · ' + when : ''));
+        });
+      })
+      .catch(function (e) { modFail(box, e); });
+  }
+
+  $('histBtn').addEventListener('click', loadProjectHistory);
+  onViewOpen('viewMemory', loadProjectHistory);
+
+
+  /* ─── Модели и политика маршрутизации ─────────────────────────────── */
+
+  var policyEditable = false;
+
+  function applyPolicyControls() {
+    $('policyThird').disabled = !policyEditable;
+    $('policyBudget').disabled = myRole !== 'admin';
+    $('policySave').disabled = myRole !== 'admin';
+  }
+
+  function loadPolicy() {
+    if (!token) { $('policyNote').textContent = 'Нужен сохранённый токен — раздел «Служебное».'; return; }
+    api('/api/routing-settings')
+      .then(function (d) {
+        var p = (d && d.policy) || {};
+        // Право менять режим складывается из трёх условий, и человеку
+        // показывается, какого именно не хватает. «Недоступно» без причины
+        // отправляет искать поломку там, где её нет.
+        policyEditable = myRole === 'admin' && !p.forceFree && !!d.gatewayConfigured;
+        $('policyThird').value = p.allowThirdPartyModels ? 'on' : 'off';
+        $('policyBudget').value = p.monthlyBudgetUsd == null ? '' : p.monthlyBudgetUsd;
+        applyPolicyControls();
+
+        var stat = $('policyStat');
+        modClear(stat);
+        modStat(stat, 'сторонние модели', p.allowThirdPartyModels ? 'вкл' : 'выкл',
+          p.allowThirdPartyModels ? 'mod-ok' : '');
+        modStat(stat, 'AI Gateway', d.gatewayConfigured ? 'настроен' : 'нет',
+          d.gatewayConfigured ? 'mod-ok' : 'mod-bad');
+        modStat(stat, 'тариф Workers', d.workersPlan || '—');
+        modStat(stat, 'израсходовано за ' + (d.month || 'месяц') + ', USD',
+          Number(d.committedUsd || 0).toFixed(4));
+        modStat(stat, 'бюджет, USD', p.monthlyBudgetUsd == null ? '—' : p.monthlyBudgetUsd);
+
+        $('policyNote').textContent = d.note || '';
+        $('policyHint').textContent = myRole !== 'admin'
+          ? 'Менять политику может только владелец.'
+          : p.forceFree ? 'Профиль закреплён в режиме Free — сторонние модели включить нельзя.'
+          : !d.gatewayConfigured ? 'Без AI_GATEWAY_ID сторонние модели недоступны технически.'
+          : 'Изменения применяются к следующему запросу.';
+      })
+      .catch(function (e) { $('policyNote').textContent = e.message; });
+  }
+
+  $('policySave').addEventListener('click', function () {
+    var btn = $('policySave');
+    var budget = $('policyBudget').value.trim();
+    var payload = { allowThirdPartyModels: $('policyThird').value === 'on' };
+    if (budget !== '') payload.monthlyBudgetUsd = Number(budget);
+    btn.disabled = true;
+    api('/api/admin/routing-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+      .then(function () { toast('Политика сохранена.'); loadPolicy(); })
+      .catch(function (e) { toast(e.message); })
+      .then(function () { applyPolicyControls(); });
+  });
+
+  $('catalogBtn').addEventListener('click', function () {
+    var out = $('catalogOut');
+    var btn = $('catalogBtn');
+    btn.disabled = true;
+    out.classList.remove('hidden');
+    out.textContent = 'запрашиваю…';
+    api('/api/model-catalog')
+      .then(function (d) {
+        var models = (d && d.models) || [];
+        var lines = [
+          'Получено: ' + (d.returnedCount || models.length) +
+          (d.complete ? ' (полный список)' : ' (список обрезан потолком страниц)'),
+          'Снято: ' + (d.fetchedAt || '—'),
+          d.scope || '',
+          ''
+        ];
+        models.forEach(function (m) {
+          lines.push([
+            m.slug,
+            m.task || 'unknown',
+            m.hosted ? 'cloudflare' : 'внешняя',
+            m.reviewed ? 'в реестре' : 'НЕ в реестре',
+            m.freeAllowlisted ? 'free' : ''
+          ].filter(Boolean).join(' · '));
+        });
+        out.textContent = lines.join('\n');
+      })
+      .catch(function (e) { out.textContent = e.message; })
+      .then(function () { btn.disabled = false; });
+  });
+
+  function loadModelGrid() {
+    var grid = $('modelsGrid');
+    if (noToken(grid)) return;
+    api('/api/models')
+      .then(function (d) {
+        var models = (d && d.models) || [];
+        modClear(grid);
+        $('modelCount').textContent = models.filter(function (m) { return m.available; }).length +
+          '/' + models.length;
+        models.forEach(function (m) {
+          var tile = document.createElement('div');
+          tile.className = 'mod-tile ' + (m.available ? 'live' : 'off');
+          var b = document.createElement('b');
+          b.textContent = m.slug;
+          var s = document.createElement('span');
+          s.textContent = m.available
+            ? ((m.capabilities || []).join(', ') || 'без объявленных возможностей')
+            : (m.blockedReason || 'недоступна');
+          var tag = document.createElement('i');
+          tag.className = 'tag';
+          tag.textContent = m.provider + ' · ' + m.tier +
+            (m.contextWindow ? ' · ' + m.contextWindow : '');
+          tile.appendChild(b);
+          tile.appendChild(s);
+          tile.appendChild(tag);
+          grid.appendChild(tile);
+        });
+      })
+      .catch(function (e) { modFail(grid, e); });
+  }
+
+  onViewOpen('viewModels', loadPolicy);
+  onViewOpen('viewModels', loadModelGrid);
+
+
+  /* ─── Администрирование ───────────────────────────────────────────── */
+
+  var ROLE_LABELS = { admin: 'Владелец', editor: 'Участник', viewer: 'Просмотр' };
+
+  $('accCreate').addEventListener('click', function () {
+    var name = $('accName').value.trim();
+    if (!name) { toast('Укажите имя аккаунта.'); return; }
+    var days = Number($('accDays').value);
+    if (!Number.isFinite(days) || days < 1) { toast('Срок действия — от одного дня.'); return; }
+    var btn = $('accCreate');
+    btn.disabled = true;
+    api('/api/admin/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, role: $('accRole').value, days: days })
+    })
+      .then(function (r) {
+        var out = $('accSecret');
+        out.classList.remove('hidden');
+        // Ключ печатается ЦЕЛИКОМ и только здесь: сервер больше его не
+        // отдаст. Обрезать его «для аккуратности» значило бы выдать
+        // нерабочий ключ и потерять аккаунт.
+        out.textContent = 'Сохраните ключ сейчас — повторно он не выдаётся.\n\n' +
+          JSON.stringify(r.account, null, 2);
+        $('accName').value = '';
+        loadAccounts();
+      })
+      .catch(function (e) { toast(e.message); })
+      .then(function () { btn.disabled = false; });
+  });
+
+  function revokeAccount(id, name) {
+    if (!window.confirm('Отозвать доступ «' + name + '»? Его ключ перестанет работать немедленно.')) return;
+    api('/api/admin/accounts/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: id })
+    })
+      .then(function () { toast('Доступ отозван.'); loadAccounts(); })
+      .catch(function (e) { toast(e.message); });
+  }
+
+  function loadAccounts() {
+    var box = $('accounts');
+    if (noToken(box)) return;
+    api('/api/admin/accounts')
+      .then(function (d) {
+        var list = (d && d.accounts) || [];
+        modClear(box);
+        if (!list.length) { modEmpty(box, 'Аккаунтов нет.'); return; }
+        list.forEach(function (a) {
+          var expires = a.expires_at ? new Date(a.expires_at).toLocaleDateString('ru-RU') : 'бессрочно';
+          var meta = (ROLE_LABELS[a.role] || a.role) + ' · до ' + expires + ' · ' + a.id +
+            (a.disabled ? ' · ОТОЗВАН' : '');
+          var actions = a.disabled ? [] : [
+            { label: 'Отозвать', run: function () { revokeAccount(a.id, a.name); } }
+          ];
+          var row = modItem(box, a.name, meta, actions);
+          if (a.disabled) row.style.opacity = '.55';
+        });
+      })
+      .catch(function (e) { modFail(box, e); });
+  }
+
+  $('accList').addEventListener('click', loadAccounts);
+
+  var CAPABILITY_LABELS = {
+    git: 'работа с репозиторием',
+    deploy: 'публикация',
+    sandbox: 'запуск команд в песочнице',
+    qa: 'прогон тестов'
+  };
+
+  /* Состояние читается СРАЗУ ПОСЛЕ записи, а не по отдельной кнопке.
+     Форма, которая ничего не показывает после нажатия, заставляет
+     проверять результат запуском задачи — то есть узнавать о своей
+     же настройке по отказу. */
+  function setPermission(enabled) {
+    api('/api/admin/permissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: currentProject, capability: $('permCap').value, enabled: enabled })
+    })
+      .then(function () {
+        toast((enabled ? 'Разрешение выдано' : 'Разрешение отозвано') + ' · ' + currentProject);
+        loadPermissions();
+      })
+      .catch(function (e) { toast(e.message); });
+  }
+
+  function loadPermissions() {
+    var box = $('permissions');
+    if (noToken(box)) return;
+    api('/api/admin/permissions?projectId=' + encodeURIComponent(currentProject))
+      .then(function (d) {
+        var list = (d && d.permissions) || [];
+        modClear(box);
+        list.forEach(function (p) {
+          var row = modItem(box, CAPABILITY_LABELS[p.capability] || p.capability,
+            p.capability + ' · ' + (p.granted ? 'выдано' : 'не выдано'));
+          if (!p.granted) row.style.opacity = '.55';
+        });
+      })
+      .catch(function (e) { modFail(box, e); });
+  }
+
+  $('permAllow').addEventListener('click', function () { setPermission(true); });
+  $('permDeny').addEventListener('click', function () { setPermission(false); });
+  $('permList').addEventListener('click', loadPermissions);
+
+  $('ownAssign').addEventListener('click', function () {
+    var resource = $('ownResource').value.trim(), account = $('ownAccount').value.trim();
+    if (!resource || !account) { toast('Нужны идентификаторы ресурса и аккаунта.'); return; }
+    api('/api/admin/ownership', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: $('ownKind').value, resourceId: resource, accountId: account })
+    })
+      .then(function () { toast('Владелец назначен.'); })
+      .catch(function (e) { toast(e.message); });
+  });
+
+  $('priceSave').addEventListener('click', function () {
+    var model = $('priceModel').value.trim();
+    var input = Number($('priceIn').value), output = Number($('priceOut').value);
+    if (!model) { toast('Укажите слаг модели.'); return; }
+    if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output) || input < 0 || output < 0) {
+      toast('Тарифы задаются целым числом micro-USD за миллион токенов.');
+      return;
+    }
+    api('/api/admin/billing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: model, inputRate: input, outputRate: output })
+    })
+      .then(function (r) { toast('Тариф сохранён · учёт: ' + r.mode); loadBilling(); })
+      .catch(function (e) { toast(e.message); });
+  });
+
+  $('limitSave').addEventListener('click', function () {
+    var scope = $('limitScope').value.trim() || 'global';
+    var usd = Number($('limitUsd').value);
+    if (!Number.isFinite(usd) || usd <= 0 || usd > 1000) { toast('Бюджет: больше 0 и до 1000 USD.'); return; }
+    api('/api/admin/billing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: scope, usd: usd })
+    })
+      .then(function (r) { toast('Бюджет сохранён · учёт: ' + r.mode); loadBilling(); })
+      .catch(function (e) { toast(e.message); });
+  });
+
+  function loadBilling() {
+    var box = $('billing');
+    if (noToken(box)) return;
+    api('/api/admin/billing')
+      .then(function (d) {
+        modClear(box);
+        var h = document.createElement('h3');
+        h.textContent = 'Режим учёта: ' + (d.mode || 'off');
+        box.appendChild(h);
+
+        var prices = (d && d.prices) || [];
+        var limits = (d && d.limits) || [];
+        if (!prices.length) {
+          var p = document.createElement('p');
+          p.className = 'mod-empty';
+          p.textContent = 'Тарифов нет — стоимость всех вызовов остаётся неизвестной.';
+          box.appendChild(p);
+        } else {
+          prices.forEach(function (r) {
+            modItem(box, r.model,
+              'вход ' + r.input_micro_usd_per_million + ' · выход ' + r.output_micro_usd_per_million +
+              ' micro-USD за млн');
+          });
+        }
+        limits.forEach(function (r) {
+          modItem(box, 'бюджет ' + r.scope,
+            'лимит ' + (r.limit_micro_usd / 1e6).toFixed(4) + ' USD · израсходовано ' +
+            ((r.spent_micro_usd || 0) / 1e6).toFixed(4) + ' USD');
+        });
+      })
+      .catch(function (e) { modFail(box, e); });
+  }
+
+  $('billingList').addEventListener('click', loadBilling);
+  onViewOpen('viewAdmin', loadAccounts);
+  onViewOpen('viewAdmin', loadPermissions);
+  onViewOpen('viewAdmin', loadBilling);
+
+
   if (token) api('/api/me').then(function (me) {
+    myRole = me.account.role;
+    // Пункт «Администрирование» появляется только у владельца — остальным
+    // сервер ответит отказом на каждый маршрут раздела, и кнопка была бы
+    // обещанием возможности, которой нет.
+    $('navAdmin').classList.toggle('hidden', myRole !== 'admin');
+    applyPolicyControls();
     if (me.account.role !== 'admin') {
       var accountProject = 'p_' + me.account.id.replace(/-/g, '');
       if (!currentProject || currentProject.indexOf(accountProject) !== 0) {

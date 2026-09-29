@@ -1,7 +1,7 @@
 import { readModelPolicy, setModelPolicy, modelBlockReason, FREE_MODEL_SLUGS, ModelPolicyError } from "./lib/model-policy";
 import { readLiveCatalog } from "./lib/model-catalog";
 import { backupProject, restoreBackup } from "./lib/backups";
-import { withProjectLock } from "./lib/project-control";
+import { withProjectLock, PROJECT_CAPABILITIES } from "./lib/project-control";
 import { dispatchOutbox } from "./lib/outbox";
 import { authenticate, authorizeRequest, createAccount, requireResource, activeAccount, administrator, AccessError, type Principal } from "./lib/accounts";
 import { getAgentByName } from "agents";
@@ -421,9 +421,32 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       await env.AZRAIL_D1.prepare("UPDATE access_accounts SET disabled=1 WHERE id=?").bind(String(parsedBody.accountId??"")).run();
       return json({success:true},env);
     }
+    /* ЧТЕНИЕ РАЗРЕШЕНИЙ ПРОЕКТА.
+     *
+     * Пробел, найденный при сведении интерфейсов в один: выдать и отозвать
+     * возможность было можно, а УЗНАТЬ текущее состояние — нет. Таблица
+     * project_permissions читалась только изнутри исполнения
+     * (lib/project-control.ts), и снаружи оставалась записью вслепую.
+     *
+     * На практике это означало вот что: администратор нажимает «Выдать»,
+     * ничего не меняется на экране, и единственный способ проверить
+     * результат — запустить задачу и посмотреть, откажет ли она. Форма без
+     * обратной связи заставляет угадывать собственное состояние системы.
+     *
+     * Список возможностей тот же, что в проверке ниже, и берётся из одного
+     * места: два перечня разошлись бы при первом же добавлении новой
+     * возможности, и расхождение обнаружилось бы отказом задачи.
+     */
+    if(url.pathname === "/api/admin/permissions" && request.method === "GET") {
+      const project=url.searchParams.get("projectId");
+      if(!project) return json({error:"projectId обязателен."},env,400);
+      const rows=await env.AZRAIL_D1.prepare("SELECT capability FROM project_permissions WHERE project_id=?").bind(project).all<{capability:string}>();
+      const granted=new Set(rows.results.map(r=>r.capability));
+      return json({projectId:project,permissions:PROJECT_CAPABILITIES.map(capability=>({capability,granted:granted.has(capability)}))},env);
+    }
     if(url.pathname === "/api/admin/permissions" && request.method === "POST") {
       const project=String(parsedBody.projectId??""),capability=String(parsedBody.capability??"");
-      if(!project || !["git","deploy","sandbox","qa"].includes(capability)) return json({error:"Неверное разрешение."},env,400);
+      if(!project || !(PROJECT_CAPABILITIES as readonly string[]).includes(capability)) return json({error:"Неверное разрешение."},env,400);
       const sql=parsedBody.enabled===true?"INSERT OR IGNORE INTO project_permissions(project_id,capability) VALUES(?,?)":"DELETE FROM project_permissions WHERE project_id=? AND capability=?";
       await env.AZRAIL_D1.prepare(sql).bind(project,capability).run();return json({success:true},env);
     }

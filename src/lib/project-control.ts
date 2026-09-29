@@ -8,8 +8,20 @@ export async function withProjectLock<T>(env:Env,project:string|undefined,owner:
   try { return await work(); }
   finally { await env.AZRAIL_D1.prepare("DELETE FROM operation_locks WHERE project_id=? AND owner=?").bind(project,owner).run(); }
 }
+/* ЕДИНЫЙ СПИСОК ВОЗМОЖНОСТЕЙ, ТРЕБУЮЩИХ РАЗРЕШЕНИЯ.
+ *
+ * Тот же перечень был выписан строкой в трёх местах: здесь, в проверке
+ * POST /api/admin/permissions и в интерфейсе. Три копии одного списка
+ * расходятся при первом же добавлении новой возможности — и расхождение
+ * обнаруживается не при сборке, а отказом задачи у пользователя.
+ *
+ * as const: список обязан быть неизменяемым, иначе «единый источник»
+ * становится общей изменяемой переменной. */
+export const PROJECT_CAPABILITIES = ["git", "deploy", "sandbox", "qa"] as const;
+export type ProjectCapability = (typeof PROJECT_CAPABILITIES)[number];
+
 export async function requireCapability(env:Env,project:string|undefined,capability:string):Promise<void> {
-  if(!["git","deploy","sandbox","qa"].includes(capability)) return;
+  if(!(PROJECT_CAPABILITIES as readonly string[]).includes(capability)) return;
   if(!project) throw new AccessError("Интеграция требует проект.");
   const row=await env.AZRAIL_D1.prepare("SELECT 1 AS ok FROM project_permissions WHERE project_id=? AND capability=?").bind(project,capability).first();
   if(!row) throw new AccessError(`Администратор не разрешил ${capability} для этого проекта.`);
