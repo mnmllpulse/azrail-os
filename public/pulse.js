@@ -156,8 +156,52 @@ function fmtInt(value){
 }
 function fmtUsd(value){
   const n=Number(value);
-  return Number.isFinite(n)?'
+  return Number.isFinite(n) ? "$" + n.toFixed(2) : "—";
+}
+async function openSystem(){
+  if(!token){openAccess("Сначала подключите AZRAIL.");return;}
+  $("systemPanel").hidden=false;
+  $("systemNote").textContent="Загружаю реальные данные runtime…";
+  try{
+    const routing=await api("/api/azrail/routing-settings");
+    const policy=routing.policy||{};
+    $("systemWorkersPlan").textContent=String(routing.workersPlan||"unknown").toUpperCase();
+    $("systemGateway").textContent=routing.gatewayConfigured?"CONFIGURED":"OFF";
+    $("systemThirdParty").textContent=policy.allowThirdPartyModels?"ENABLED":"OFF";
+    $("systemForceFree").textContent=policy.forceFree?"ON":"OFF";
+    $("systemBudget").textContent=fmtUsd(policy.monthlyBudgetUsd);
+    $("systemSpend").textContent=fmtUsd(routing.committedUsd);
+    $("systemNote").textContent=routing.note||"Runtime settings загружены.";
 
+    if(!project) await ensureProjectList();
+    if(!project){
+      $("systemMissions").textContent="0";
+      $("systemCalls").textContent="0";
+      $("systemInputTokens").textContent="0";
+      $("systemOutputTokens").textContent="0";
+      $("systemMetering").textContent="—";
+      $("systemLatency").textContent="—";
+      $("systemUnknownCost").textContent="0";
+      return;
+    }
+
+    const metrics=await api("/api/azrail/metrics?projectId="+encodeURIComponent(project));
+    const missionRows=Array.isArray(metrics.missions)?metrics.missions:[];
+    const missionTotal=missionRows.reduce((sum,row)=>sum+(Number(row.count)||0),0);
+    const models=metrics.models||{};
+    $("systemMissions").textContent=fmtInt(missionTotal);
+    $("systemCalls").textContent=fmtInt(models.calls||0);
+    $("systemInputTokens").textContent=fmtInt(models.input_tokens||0);
+    $("systemOutputTokens").textContent=fmtInt(models.output_tokens||0);
+    $("systemMetering").textContent=String(metrics.metering||"off").toUpperCase();
+    $("systemLatency").textContent=Number.isFinite(Number(models.mean_ms))?fmtInt(models.mean_ms)+" ms":"—";
+    $("systemUnknownCost").textContent=fmtInt(models.unknown_cost_calls||0);
+  }catch(e){
+    $("systemNote").textContent=e.message;
+    if(e.status===401){$("systemPanel").hidden=true;openAccess(e.message);}
+  }
+}
+function closeSystem(){$("systemPanel").hidden=true;}
 
 async function loadStudioCatalog(){
   if(studioCatalogData)return studioCatalogData;
