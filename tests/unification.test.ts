@@ -216,3 +216,30 @@ describe("Consolidation regressions", () => {
     expect(api.indexOf("const studioRoute = routeStudio")).toBeLessThan(api.indexOf("const budget = await chargeWrites"));
   });
 });
+
+
+describe("System observability drawer", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+  const api = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+
+  it("показывает только реальные runtime данные", () => {
+    expect(shell).toContain('id="systemPanel"');
+    expect(shell).toContain('id="systemOpen"');
+    expect(shell).not.toContain("SYSTEM ONLINE");
+    expect(client).toContain("/api/azrail/metrics?projectId=");
+    expect(client).toContain("/api/azrail/routing-settings");
+  });
+
+  it("защищает Project Workspace и metrics ownership проверкой", () => {
+    expect(api).toContain('await requireResource(env, principal, "project", projectId);');
+    expect(api).toContain('await requireResource(env,principal,"project",project);');
+  });
+
+  it("не содержит хвостового дублированного runtime", () => {
+    expect(client.split("})();").length - 1).toBe(1);
+    expect(client.split("$('systemOpen').addEventListener").length - 1).toBe(1);
+    expect(client.split("$('projectsOpen').addEventListener").length - 1).toBe(1);
+  });
+});
