@@ -89,6 +89,13 @@ function json(data: unknown, env: Env, status = 200): Response {
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+    const incomingUrl = new URL(request.url);
+    if (request.method === "GET" && incomingUrl.pathname === "/" && env.ASSETS) {
+      // Canonical product entrypoint. Legacy dashboards remain explicit assets
+      // (/index.html, /ultimate.html) and are not deleted.
+      const shell = await env.ASSETS.fetch(new Request(new URL("/pulse.html", incomingUrl), request));
+      if (shell.ok) return shell;
+    }
     const requestCf = ((request as Request & { cf?: Record<string, unknown> }).cf ?? {});
     // Pulse Shell speaks through /api/azrail/*, but the mature runtime keeps
     // the original route names. Normalize BEFORE auth/idempotency/rate-limit
@@ -1298,7 +1305,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     const wantsHtml = (request.headers.get("Accept") ?? "").includes("text/html");
     if (request.method === "GET" && wantsHtml && !url.pathname.startsWith("/api/") && env.ASSETS) {
       try {
-        const page = await env.ASSETS.fetch(new Request(new URL("/index.html", url), request));
+        const page = await env.ASSETS.fetch(new Request(new URL("/pulse.html", url), request));
         if (page.ok) {
           // 200, а не 404: это единственная страница приложения, и для
           // клиентской навигации она валидный ответ на любой её путь.
