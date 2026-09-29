@@ -4,7 +4,7 @@ import { assertRepo, UnsafePathError } from "../lib/safe-path";
 import { requireCapability } from "../lib/project-control";
 import { AccessError } from "../lib/accounts";
 import { unzipSync } from "fflate";
-import type { Env, DeployAgentState, TaskRequest, TaskResult } from "../types";
+import type { Env, DeployAgentState, TaskRequest, TaskResult, DeployOperation } from "../types";
 
 const REQUIRED_FILES = ["package.json", "wrangler.toml"];
 
@@ -51,17 +51,37 @@ export class DeployAgent extends Agent<Env, DeployAgentState> {
       return this.checkZipReadiness(request);
     }
 
+    const deployOp = request.deployOp;
+    if (!deployOp || deployOp.type !== "trigger_ci") {
+      return {
+        status: "needs_input",
+        agent: "deploy-agent",
+        summary: "Deploy readiness можно анализировать автоматически, но внешний CI не запускается без явного deployOp.trigger_ci.",
+        questions: [
+          'Для staging передай deployOp: {"type":"trigger_ci","environment":"staging"}.',
+          'Production дополнительно требует confirmProduction=true и серверный AZRAIL_ALLOW_PRODUCTION_DEPLOY=true.',
+        ],
+      };
+    }
+
+    if (request.intent !== "deploy") {
+      return {
+        status: "needs_input",
+        agent: "deploy-agent",
+        summary: "Внешний deploy отклонён: TaskRequest должен иметь intent=deploy.",
+      };
+    }
+
     if (this.env.GITHUB_TOKEN && this.env.GITHUB_REPO) {
-      return this.triggerCi(request);
+      return this.triggerCi(request, deployOp);
     }
 
     return {
       status: "needs_input",
       agent: "deploy-agent",
-      summary: "Готов проверить готовность к деплою или запустить существующий CI.",
+      summary: "Deploy разрешён структурно, но GitHub CI не настроен.",
       questions: [
-        "Чтобы проверить архив — пришли input_type=zip с r2Key.",
-        "Чтобы триггерить GitHub CI напрямую — задай секреты GITHUB_TOKEN и GITHUB_REPO (wrangler secret put).",
+        "Задай серверные секреты GITHUB_TOKEN и GITHUB_REPO.",
       ],
     };
   }
@@ -91,7 +111,7 @@ export class DeployAgent extends Agent<Env, DeployAgentState> {
     };
   }
 
-  private async triggerCi(request: TaskRequest): Promise<TaskResult> {
+  private async triggerCi(request: TaskRequest, op: Extract<DeployOperation, { type: "trigger_ci" }>): Promise<TaskResult> {
     try {
       await requireCapability(this.env, request.projectId, "deploy");
     } catch (err) {
@@ -104,6 +124,21 @@ export class DeployAgent extends Agent<Env, DeployAgentState> {
       }
       throw err;
     }
+
+    if (
+      op.environment === "production" &&
+      (op.confirmProduction !== true || this.env.AZRAIL_ALLOW_PRODUCTION_DEPLOY !== "true")
+    ) {
+      return {
+        status: "needs_input",
+        agent: "deploy-agent",
+        summary: "Production deploy заблокирован fail-closed.",
+        questions: [
+          "Для production нужны одновременно deployOp.confirmProduction=true и серверный AZRAIL_ALLOW_PRODUCTION_DEPLOY=true.",
+        ],
+      };
+    }
+
     // GITHUB_REPO — секрет окружения, а не поле из тела запроса, поэтому
     // риск здесь ниже, чем у аналогичных мест в git-agent.ts/qa-agent.ts,
     // где repo приходит из request. Но именно этот вызов до сих пор
@@ -135,7 +170,7 @@ export class DeployAgent extends Agent<Env, DeployAgentState> {
       },
       body: JSON.stringify({
         event_type: "azrail-deploy",
-        client_payload: { projectId: request.projectId ?? null, triggeredAt: new Date().toISOString() },
+        client_payload: { projectId: request.projectId ?? null, environment: op.environment, triggeredAt: new Date().toISOString() },
       }),
     });
 
@@ -151,7 +186,7 @@ export class DeployAgent extends Agent<Env, DeployAgentState> {
     return {
       status: "done",
       agent: "deploy-agent",
-      summary: `Событие azrail-deploy отправлено в ${repo} — дальше сборку и тесты ведёт существующий CI.`,
+      summary: `Событие azrail-deploy (${op.environment}) отправлено в ${repo} — дальше сборку и тесты ведёт существующий CI.`,
     };
   }
 }
