@@ -11,6 +11,7 @@ describe("Pulse OS → AZRAIL facade", () => {
     expect(canonicalApiPath("/api/azrail/mission/cancel")).toBe("/api/mission/cancel");
     expect(canonicalApiPath("/api/azrail/mission/hint")).toBe("/api/mission/hint");
     expect(canonicalApiPath("/api/azrail/presence")).toBe("/api/presence");
+    expect(canonicalApiPath("/api/azrail/observability")).toBe("/api/observability");
   });
 
   it("сохраняет project suffix", () => {
@@ -161,5 +162,40 @@ describe("Studio and Labs consolidation", () => {
 
   it("не использует innerHTML для project/studio данных", () => {
     expect(client).not.toMatch(/innerHTML\s*=/);
+  });
+});
+
+
+describe("Advanced observability", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const shell = fs.readFileSync(path.join(root, "public/pulse.html"), "utf8");
+  const client = fs.readFileSync(path.join(root, "public/pulse.js"), "utf8");
+  const api = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+  const observer = fs.readFileSync(path.join(root, "src/lib/observability.ts"), "utf8");
+
+  it("использует защищённый AZRAIL facade", () => {
+    expect(client).toContain("/api/azrail/observability?projectId=");
+    expect(api).toContain('url.pathname === "/api/observability"');
+    expect(shell).toContain('id="advancedPanel"');
+  });
+
+  it("aggregator read-only и не создаёт вторую telemetry базу", () => {
+    expect(observer).toContain("FROM model_calls");
+    expect(observer).toContain("FROM spend_limits");
+    expect(observer).toContain("FROM request_quotas");
+    expect(observer).not.toMatch(/\b(?:INSERT|UPDATE|DELETE)\b/);
+  });
+
+  it("не маскирует неизвестную стоимость как точный total", () => {
+    expect(observer).toContain("unknownCostCalls");
+    expect(observer).toContain("measuredCostIncomplete");
+    expect(observer).toContain("Measured USD excludes calls");
+    expect(client).toContain("unknown");
+  });
+
+  it("Advanced UI не вставляет telemetry через innerHTML", () => {
+    expect(client).not.toContain(".innerHTML");
+    expect(client).toContain("renderKeyValue");
+    expect(shell).toContain("LEGACY ↗");
   });
 });
