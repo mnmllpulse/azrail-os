@@ -13,6 +13,14 @@ let mode=cached('azrail_pulse_mode')||'auto';
 let knownProjects=[];
 let studioCatalogData=null;
 let studioHint='';
+function loadGlobe(){
+  const frame=$('pulseGlobe');
+  if(!frame||frame.src)return;
+  const src=frame.dataset.src;
+  if(src)frame.src=src;
+}
+if('requestIdleCallback' in window)window.requestIdleCallback(loadGlobe,{timeout:700});
+else setTimeout(loadGlobe,120);
 const labels={accepted:'Принято',queued:'В очереди',planning:'Планирование',executing:'Выполнение',verifying:'Проверка',checking:'Проверка',repairing:'Исправление',waiting_approval:'Нужно решение',completed:'Готово',done:'Готово',failed:'Ошибка',cancelled:'Остановлено'};
 function notice(t){$('notice').textContent=t||'';}
 function headers(json,key){const h={Authorization:'Bearer '+token};if(json)h['Content-Type']='application/json';if(key)h['Idempotency-Key']=key;return h;}
