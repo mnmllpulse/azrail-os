@@ -41,6 +41,33 @@
     done: 'Готово',
   };
 
+  // ─── Close functions (must be defined first) ───────────────────
+  function closeAccess() {
+    const panel = $('access');
+    if (panel) panel.hidden = true;
+  }
+
+  function closeProjects() {
+    const panel = $('projectsPanel');
+    if (panel) panel.hidden = true;
+  }
+
+  function closeStudioCatalog() {
+    const panel = $('studioCatalog');
+    if (panel) panel.hidden = true;
+  }
+
+  function closeCapabilityCatalog() {
+    const panel = $('capabilitiesPanel');
+    if (panel) panel.hidden = true;
+  }
+
+  function closeAdvanced() {
+    const panel = $('advancedPanel');
+    if (panel) panel.hidden = true;
+  }
+
+  // ─── Core utilities ───────────────────────────────────────────
   function notice(text) {
     const el = $('notice');
     if (el) el.textContent = text || '';
@@ -79,11 +106,6 @@
     }
     const noticeEl = $('accessNotice');
     if (noticeEl) noticeEl.textContent = msg || '';
-  }
-
-  function closeAccess() {
-    const panel = $('access');
-    if (panel) panel.hidden = true;
   }
 
   function setBusy(value) {
@@ -142,6 +164,7 @@
     }
   }
 
+  // ─── Authorization ────────────────────────────────────────────
   async function connect() {
     const candidate = $('accessKey')?.value.trim();
     if (!candidate) {
@@ -156,6 +179,9 @@
       cached('azrail_ultimate_token', token);
       closeAccess();
       notice('AZRAIL подключён: ' + (me.account?.name || 'доступ подтверждён') + '.');
+      await ensureProjectList();
+      heartbeatPresence();
+      if (mission) poll();
     } catch (e) {
       token = previous;
       const noticeEl = $('accessNotice');
@@ -163,6 +189,7 @@
     }
   }
 
+  // ─── Project management ────────────────────────────────────────
   async function ensureProjectList() {
     const data = await api('/api/azrail/projects');
     knownProjects = Array.isArray(data.projects) ? data.projects : [];
@@ -193,6 +220,7 @@
     return project;
   }
 
+  // ─── Workspace rendering ──────────────────────────────────────
   function workspaceRow(title, meta) {
     const row = document.createElement('div');
     row.className = 'workspace-row';
@@ -316,11 +344,7 @@
     }
   }
 
-  function closeProjects() {
-    const panel = $('projectsPanel');
-    if (panel) panel.hidden = true;
-  }
-
+  // ─── Studio/Labs capability catalog ────────────────────────────
   async function loadStudioCatalog() {
     if (studioCatalogData.length) return studioCatalogData;
     const response = await fetch('/pulse-studios.json', { cache: 'no-store' });
@@ -396,11 +420,6 @@
     }
   }
 
-  function closeCapabilityCatalog() {
-    const panel = $('capabilitiesPanel');
-    if (panel) panel.hidden = true;
-  }
-
   function launchCapability() {
     if (!activeCapability) return;
     if (activeCapability.mode) setMode(activeCapability.mode);
@@ -411,6 +430,7 @@
     notice((activeCapability.title || 'Studio') + ' подготовлена. Уточните задачу и нажмите CREATE.');
   }
 
+  // ─── Mission execution ────────────────────────────────────────
   function renderMission(data) {
     const panel = $('mission');
     if (panel) panel.hidden = false;
@@ -445,7 +465,7 @@
       const done = renderMission(data);
       if (done) {
         setBusy(false);
-        notice(data.mission?.status === 'completed' ? 'Миссия з��вершена и проверена.' : 'Миссия завершилась: ' + (labels[data.mission?.status] || data.mission?.status || 'done'));
+        notice(data.mission?.status === 'completed' ? 'Миссия завершена и проверена.' : 'Миссия завершилась: ' + (labels[data.mission?.status] || data.mission?.status || 'done'));
       } else {
         setBusy(true);
         timer = setTimeout(poll, 3500);
@@ -457,6 +477,7 @@
     }
   }
 
+  // ─── Advanced observability ──────────────────────��─────────────
   function renderKeyValue(rootId, entries) {
     const root = $(rootId);
     if (!root) return;
@@ -545,11 +566,7 @@
     }
   }
 
-  function closeAdvanced() {
-    const panel = $('advancedPanel');
-    if (panel) panel.hidden = true;
-  }
-
+  // ─── Main Composer form ────────────────────────────────────────
   const composer = $('composer');
   if (composer) {
     composer.addEventListener('submit', async (e) => {
@@ -589,28 +606,55 @@
     });
   }
 
+  // ─── Mode selection ────────────────────────────────────────────
   for (const btn of document.querySelectorAll('[data-mode]')) {
     btn.addEventListener('click', () => setMode(btn.dataset.mode));
   }
   setMode(mode);
 
+  // ─── Navigation buttons ────────────────────────────────────────
   const studiosOpen = $('studiosOpen');
   const labsOpen = $('labsOpen');
+  const projectsOpen = $('projectsOpen');
+  const advancedOpen = $('advancedOpen');
+
   if (studiosOpen) studiosOpen.addEventListener('click', () => openCapabilityCatalog('studio'));
   if (labsOpen) labsOpen.addEventListener('click', () => openCapabilityCatalog('lab'));
-
-  const studioCatalogClose = $('studioCatalogClose');
-  const studioCatalog = $('studioCatalog');
-  if (studioCatalogClose) studioCatalogClose.addEventListener('click', closeStudioCatalog);
-  if (studioCatalog) studioCatalog.addEventListener('click', (event) => { if (event.target === studioCatalog) closeStudioCatalog(); });
-
-  const projectsOpen = $('projectsOpen');
   if (projectsOpen) projectsOpen.addEventListener('click', openProjects);
-  const projectsClose = $('projectsClose');
-  if (projectsClose) projectsClose.addEventListener('click', closeProjects);
-  const projectsPanel = $('projectsPanel');
-  if (projectsPanel) projectsPanel.addEventListener('click', (event) => { if (event.target === projectsPanel) closeProjects(); });
+  if (advancedOpen) advancedOpen.addEventListener('click', openAdvanced);
 
+  // ─── Modal backdrop click handlers ─────────────────────────────
+  const studioCatalog = $('studioCatalog');
+  if (studioCatalog) {
+    const closeBtn = $('studioCatalogClose');
+    if (closeBtn) closeBtn.addEventListener('click', closeStudioCatalog);
+    studioCatalog.addEventListener('click', (event) => { if (event.target === studioCatalog) closeStudioCatalog(); });
+  }
+
+  const projectsPanel = $('projectsPanel');
+  if (projectsPanel) {
+    const closeBtn = $('projectsClose');
+    if (closeBtn) closeBtn.addEventListener('click', closeProjects);
+    projectsPanel.addEventListener('click', (event) => { if (event.target === projectsPanel) closeProjects(); });
+  }
+
+  const capabilitiesPanel = $('capabilitiesPanel');
+  if (capabilitiesPanel) {
+    const closeBtn = $('capabilitiesClose');
+    if (closeBtn) closeBtn.addEventListener('click', closeCapabilityCatalog);
+    capabilitiesPanel.addEventListener('click', (event) => { if (event.target === capabilitiesPanel) closeCapabilityCatalog(); });
+    const launchBtn = $('capabilityLaunch');
+    if (launchBtn) launchBtn.addEventListener('click', launchCapability);
+  }
+
+  const advancedPanel = $('advancedPanel');
+  if (advancedPanel) {
+    const closeBtn = $('advancedClose');
+    if (closeBtn) closeBtn.addEventListener('click', closeAdvanced);
+    advancedPanel.addEventListener('click', (event) => { if (event.target === advancedPanel) closeAdvanced(); });
+  }
+
+  // ─── Access panel controls ────────────────────────────────────
   const accessConnect = $('accessConnect');
   if (accessConnect) accessConnect.addEventListener('click', connect);
 
@@ -620,12 +664,14 @@
   const accessKey = $('accessKey');
   if (accessKey) accessKey.addEventListener('keydown', (event) => { if (event.key === 'Enter') connect(); });
 
+  // ─── Globe ready + presence sync ────────────────────────────────
   addEventListener('message', (event) => {
     if (event.origin !== location.origin || event.data?.type !== 'pulse:globe-ready') return;
     globeReady = true;
     heartbeatPresence();
   });
 
+  // ─── Page visibility and polling ───────────────────────────────
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       clearTimeout(timer);
@@ -636,6 +682,7 @@
     }
   });
 
+  // ─── Initialization ────────────────────────────────────────────
   if (token) {
     ensureProjectList().then(() => {
       notice('AZRAIL подключён.');
@@ -646,13 +693,9 @@
       }
     }).catch((e) => {
       if (e.status === 401) openAccess('Ключ нужно обновить или ввести заново.');
+      else notice(e.message);
     });
   } else {
     notice('Введите задачу. При первом запуске система предложит подключить AZRAIL.');
-  }
-
-  function closeStudioCatalog() {
-    const panel = $('studioCatalog');
-    if (panel) panel.hidden = true;
   }
 })();
