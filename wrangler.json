@@ -1,5 +1,5 @@
 {
-  "name": "azrail-pulse",
+  "name": "azrail-os",
   "main": "src/unified.free.ts",
   "compatibility_date": "2026-09-29",
   "compatibility_flags": [
@@ -29,20 +29,20 @@
   "d1_databases": [
     {
       "binding": "AZRAIL_D1",
-      "database_name": "azrail-pulse-db",
-      "database_id": "00000000-0000-0000-0000-000000000000"
+      "database_name": "azrail-db",
+      "database_id": "c76e7d92-648c-45bc-b0df-f26b00d0ff88"
     }
   ],
   "kv_namespaces": [
     {
       "binding": "AZRAIL_KV",
-      "id": "00000000000000000000000000000000"
+      "id": "dab3b792264f4d9cbec5d637d4f8d71e"
     }
   ],
   "r2_buckets": [
     {
       "binding": "AZRAIL_R2",
-      "bucket_name": "azrail-pulse-artifacts"
+      "bucket_name": "azrail-artifacts"
     }
   ],
   "ai": {
