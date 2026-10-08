@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --config wrangler.staging.json",
     "types": "wrangler types",
     "db:schema": "wrangler d1 execute azrail-db --remote --file=./schema.sql",
     "test": "vitest run",
@@ -13,6 +14,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.ui.json --noEmit",
     "check": "npm run build:ui && npm run typecheck && npm test",
     "build:check": "wrangler deploy --dry-run --outdir .work/worker --containers-rollout=none",
+    "build:check:staging": "wrangler deploy --dry-run --config wrangler.staging.json --outdir .work/staging-worker --containers-rollout=none",
     "db:security": "wrangler d1 execute azrail-db --remote --file=./migrations/004-security-hardening.sql",
     "db:migrate": "node scripts/migrate.mjs",
     "smoke": "node scripts/smoke.mjs",
