@@ -1,3 +1,5 @@
+import { currentModelSettings, withModelSettings } from "../lib/model-settings-context";
+import type { ReasoningEffort } from "../lib/model-registry";
 import { sendProjectEvent, socketAuthorized } from "../lib/socket-access";
 import { eligibleRegistry } from "../lib/model-policy";
 import { initializeMissionBudget } from "../lib/billing";
@@ -314,8 +316,15 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
   }
 
   async handleTask(request: TaskRequest): Promise<TaskResult> {
-    return withBillingScope(projectBillingScope(request.projectId), () =>
-      withProjectLock(this.env,request.projectId,crypto.randomUUID(),()=>this.handleTaskLocked(request)));
+    let scope=projectBillingScope(request.projectId);
+    if(request.maxCostUsd!==undefined) {
+      const cap=Number(this.env.AZRAIL_MISSION_BUDGET_USD??"1");
+      if(!Number.isFinite(request.maxCostUsd)||request.maxCostUsd<=0||request.maxCostUsd>cap)throw new Error("Бюджет задачи превышает лимит сервера.");
+      scope=`task:${crypto.randomUUID()}`;
+      await this.env.AZRAIL_D1.prepare("INSERT INTO spend_limits(scope,limit_micro_usd) VALUES(?,?)").bind(scope,Math.floor(request.maxCostUsd*1e6)).run();
+    }
+    return withModelSettings(request, () => withBillingScope(scope, () =>
+      withProjectLock(this.env,request.projectId,crypto.randomUUID(),()=>this.handleTaskLocked(request))));
   }
   private async handleTaskLocked(request: TaskRequest): Promise<TaskResult> {
     const taskId = crypto.randomUUID();
@@ -480,6 +489,9 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     goal: string;
     maxIterations: number;
     preferredModel?: string;
+    skillIds?: string[];
+    reasoningEffort?: ReasoningEffort;
+    maxCostUsd?: number;
     publicHostname?: string;
   }): Promise<{ scheduled: true; missionId: string }> {
     const delivered=await this.ctx.storage.get<boolean>(`delivery:${params.missionId}`);
@@ -594,6 +606,9 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     goal: string;
     maxIterations: number;
     preferredModel?: string;
+    skillIds?: string[];
+    reasoningEffort?: ReasoningEffort;
+    maxCostUsd?: number;
     publicHostname?: string;
   }): Promise<void> {
     const { missionId, projectId, goal } = params;
@@ -608,10 +623,13 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     try {
       if (!await markRunning(this.env, missionId)) return;
       stopHeartbeat = await this.keepAlive();
-      await initializeMissionBudget(this.env, missionId);
+      const deploymentBudget = Number(this.env.AZRAIL_MISSION_BUDGET_USD ?? "1");
+      const requestedBudget = params.maxCostUsd ?? deploymentBudget;
+      if (!Number.isFinite(requestedBudget) || requestedBudget <= 0 || requestedBudget > deploymentBudget) throw new Error("Бюджет миссии превышает лимит сервера.");
+      await initializeMissionBudget({ ...this.env, AZRAIL_MISSION_BUDGET_USD: String(requestedBudget) }, missionId);
       const engine = new ExecutionEngine(this.env);
-      const result = await engine.runMission(
-        { message: goal, projectId, preferredModel: params.preferredModel },
+      const result = await withModelSettings(params, () => withBillingScope(`mission:${missionId}`, () => engine.runMission(
+        { message: goal, projectId, preferredModel: params.preferredModel, skillIds: params.skillIds },
         {
           missionId,
           projectId,
@@ -634,7 +652,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
           shouldAbort: () => isCancelRequested(this.env, missionId),
           takeHints: () => drainHints(this.env, missionId),
         },
-      );
+      )));
 
       await finishMission(this.env, missionId, statusForResult(result), result);
       await this.broadcastMissionEvent({
@@ -674,7 +692,7 @@ export class Orchestrator extends Agent<Env, OrchestratorState> {
     }
     const entry = candidates[0];
     const agent = await this.subAgent(entry.agentClass, `${entry.id}-${request.projectId ?? "default"}`);
-    return agent.run({ ...request, _billingScope: currentBillingScope() ?? projectBillingScope(request.projectId) });
+    return agent.run({ ...currentModelSettings(), ...request, _billingScope: currentBillingScope() ?? projectBillingScope(request.projectId) });
   }
 
   /** Коммитит сгенерированные файлы через Git Agent — по файлу за коммит

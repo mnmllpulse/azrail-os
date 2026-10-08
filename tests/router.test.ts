@@ -1,12 +1,16 @@
 // Маршрутизатор моделей — тесты отбора и объяснимости.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { route, estimateComplexity } from "../src/lib/model-router";
+import { route, estimateComplexity, runModel } from "../src/lib/model-router";
 import { isQuotaError, parseRetryAfter } from "../src/lib/model-health";
 import { MODEL_REGISTRY, policyFor, findModel } from "../src/lib/model-registry";
 import type { ModelEntry } from "../src/lib/model-registry";
+
+import { sqliteD1 } from "./stubs/sqlite-d1";
+import { eligibleRegistry } from "../src/lib/model-policy";
+import type { Env } from "../src/types";
 
 const src = (f: string) => fs.readFileSync(path.resolve(import.meta.dirname, "..", f), "utf8");
 
@@ -25,12 +29,15 @@ describe("Реестр моделей", () => {
     expect(new Set(slugs).size).toBe(slugs.length);
   });
 
-  it("сторонние модели помечены как требующие шлюза", () => {
-    // Не-@cf модель без gateway просто не работает — если пометка врёт,
-    // маршрутизатор попытается её вызвать и получит непонятную ошибку.
+  it("сторонние модели имеют явный маршрут: Gateway или прямой адаптер", () => {
     for (const m of MODEL_REGISTRY) {
-      const isCloudflare = m.slug.startsWith("@cf/");
-      expect(m.requiresGateway, `${m.slug}: пометка о шлюзе не соответствует слагу`).toBe(!isCloudflare);
+      const directOpenAI = m.transport === "openai-responses";
+      expect(m.requiresGateway, `${m.slug}: неверный маршрут`).toBe(!m.slug.startsWith("@cf/") && !directOpenAI);
+      if (directOpenAI) {
+        expect(m.provider).toBe("OpenAI");
+        expect(route("generate_code", { gatewayAvailable: true }, [m]).candidates).toEqual([]);
+        expect(route("generate_code", { openaiAvailable: true, gatewayAvailable: false }, [m]).candidates).toEqual([m]);
+      }
     }
   });
 
@@ -247,17 +254,14 @@ describe("Регрессия: третий аудит", () => {
     expect(router).toContain("retryable: (err) => !(err instanceof ModelPolicyError) && !isQuotaError(err)");
   });
 
-  it("простой проверяется только у прошедших отбор, а не у всего реестра", () => {
-    // Обратный порядок читал бы KV для каждой модели каталога на КАЖДОМ
-    // вызове — сейчас шесть чтений, но растёт линейно с реестром.
-    // Окно увеличено с 1600 до 3000: добавление preferredModel (короткое
-    // замыкание ДО этого цикла, для явного выбора модели пользователем)
-    // отодвинуло цикл дальше от начала функции — сам цикл не менялся.
-    const router = src("src/lib/model-router.ts");
-    const runStart = router.indexOf("export async function runModel");
-    const block = router.slice(runStart, runStart + 3000);
-    expect(block).toContain("for (const m of preliminary.candidates)");
-    expect(block, "обход всего реестра вернулся").not.toContain("for (const m of MODEL_REGISTRY)");
+  it("простой проверяется только у прошедших отбор, а не у всего реестра", async () => {
+    const { db } = sqliteD1();
+    const get = vi.fn(async () => null);
+    const env = { AZRAIL_D1: db, AZRAIL_KV: { get }, AI: { run: async () => ({ response: "ok" }) } } as unknown as Env;
+    const expected = route("generate_code", { gatewayAvailable: false }, await eligibleRegistry(env)).candidates;
+    await runModel(env, "generate_code", { messages: [{ role: "user", content: "Write code" }] });
+    expect(get.mock.calls.map(call => (call as unknown[])[0]).sort()).toEqual(expected.map(m => `model_cooldown:${m.slug}`).sort());
+    expect(expected.length).toBeLessThan(MODEL_REGISTRY.length);
   });
 
   it("отстранение всех моделей не проваливает запрос вслепую", () => {

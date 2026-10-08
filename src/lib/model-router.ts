@@ -1,3 +1,5 @@
+import { currentModelSettings } from "./model-settings-context";
+import type { ReasoningEffort } from "./model-registry";
 import { currentBillingScope } from "./billing-context";
 import { eligibleRegistry, policyModelCall, ModelPolicyError } from "./model-policy";
 // AZRAIL — выбор модели под задачу.
@@ -87,6 +89,7 @@ export interface RouteRequirements {
    * показ не расходился с тем, что произойдёт на самом деле.
    */
   gatewayAvailable?: boolean;
+  openaiAvailable?: boolean;
 }
 
 export interface RouteDecision {
@@ -134,6 +137,10 @@ export function route(
     // чтобы показ маршрута совпадал с реальным поведением. Раньше это
     // проверялось только в момент вызова, и самопроверка показывала
     // модель, которая на деле была бы пропущена.
+    if (model.transport === "openai-responses" && req.openaiAvailable !== true) {
+      reasoning.push(`${model.slug} — прямой OpenAI API не настроен.`);
+      continue;
+    }
     if (model.requiresGateway && req.gatewayAvailable === false) {
       reasoning.push(`${model.slug} — недоступна: нужен AI Gateway, а AI_GATEWAY_ID не задан.`);
       continue;
@@ -235,6 +242,7 @@ export interface RunOptions<T> extends RouteRequirements {
    * это поле должно избегать.
    */
   preferredModel?: string;
+  reasoningEffort?: ReasoningEffort;
 
   /**
    * Копилка расхода за миссию.
@@ -254,6 +262,11 @@ export async function runModel<T = unknown>(
   input: Record<string, unknown>,
   req: RunOptions<T> = {},
 ): Promise<ModelRunResult<T>> {
+  const settings = currentModelSettings();
+  req = { ...req, preferredModel: req.preferredModel ?? settings?.preferredModel,
+    reasoningEffort: req.reasoningEffort ?? settings?.reasoningEffort };
+  // Keep caller inputs immutable and let the provider boundary validate supported effort.
+  input = { ...input, ...(req.reasoningEffort ? { reasoning_effort: req.reasoningEffort } : {}) };
   // Явный выбор модели — до всей автоматической маршрутизации, а не как
   // ещё один кандидат в списке: если пользователь закрепил модель, тир и
   // reasoning ниже просто не должны участвовать в решении.
@@ -304,7 +317,7 @@ export async function runModel<T = unknown>(
   // каждой модели реестра на каждом вызове: сейчас это шесть чтений, но
   // растёт линейно с каталогом и добавляется к КАЖДОМУ запросу.
   const registry = await eligibleRegistry(env);
-  const preliminary = route(intent, { ...req, gatewayAvailable: !!env.AI_GATEWAY_ID }, registry);
+  const preliminary = route(intent, { ...req, gatewayAvailable: !!env.AI_GATEWAY_ID, openaiAvailable: !!env.OPENAI_API_KEY?.trim() }, registry);
 
   const unavailable: string[] = [...(req.unavailable ?? [])];
   for (const m of preliminary.candidates) {
@@ -317,7 +330,7 @@ export async function runModel<T = unknown>(
   // в обычном случае второго прохода не будет вовсе.
   let decision =
     unavailable.length > (req.unavailable?.length ?? 0)
-      ? route(intent, { ...req, unavailable, gatewayAvailable: !!env.AI_GATEWAY_ID }, registry)
+      ? route(intent, { ...req, unavailable, gatewayAvailable: !!env.AI_GATEWAY_ID, openaiAvailable: !!env.OPENAI_API_KEY?.trim() }, registry)
       : preliminary;
 
   // Крайний случай: отстранены ВСЕ подходящие модели. Провалить запрос,
@@ -394,7 +407,8 @@ export async function runModel<T = unknown>(
       // Тихая деградация вместо явного отказа — ровно то, что этот проект
       // старается не допускать.
       const asText = extractText(output);
-      if (asText.trim().length === 0) {
+      const calls = (output as { choices?: Array<{ message?: { tool_calls?: unknown[] } }> })?.choices?.[0]?.message?.tool_calls;
+      if (asText.trim().length === 0 && !(Array.isArray(calls) && calls.length > 0)) {
         const why = `${model.slug} — не удалось извлечь текст из ответа`;
         decision.reasoning.push(why);
         errors.push(why);

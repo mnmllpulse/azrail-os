@@ -1,0 +1,9 @@
+
+ RUN  v4.1.11 /workspace/azrail-app
+
+
+ Test Files  3 passed (3)
+      Tests  34 passed (34)
+   Start at  17:17:16
+   Duration  2.04s (transform 1.30s, setup 0ms, import 1.89s, tests 203ms, environment 0ms)
+

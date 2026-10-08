@@ -1,3 +1,4 @@
+import { withModelSettings } from "../lib/model-settings-context";
 import { withBillingScope, projectBillingScope } from "../lib/billing-context";
 import { Agent } from "agents";
 import { assertRepo, UnsafePathError } from "../lib/safe-path";
@@ -39,7 +40,7 @@ export class DeployAgent extends Agent<Env, DeployAgentState> {
   }
 
   async run(request: TaskRequest): Promise<TaskResult> {
-    return withBillingScope(request._billingScope ?? projectBillingScope(request.projectId), () => this.runScoped(request));
+    return withModelSettings(request, () => withBillingScope(request._billingScope ?? projectBillingScope(request.projectId), () => this.runScoped(request)));
   }
 
   private async runScoped(request: TaskRequest): Promise<TaskResult> {

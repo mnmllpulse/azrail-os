@@ -1,0 +1,70 @@
+[
+  {
+    "path": "/",
+    "status": 200,
+    "contentType": "text/html",
+    "csp": true,
+    "assets": [
+      "/assets/app.css",
+      "/assets/app.js"
+    ],
+    "htmlBytes": 7805
+  },
+  {
+    "path": "/app.html",
+    "status": 200,
+    "contentType": "text/html",
+    "csp": true
+  },
+  {
+    "path": "/auth/status",
+    "status": 200,
+    "contentType": "application/json",
+    "csp": true,
+    "body": {
+      "configured": true,
+      "account": null
+    }
+  },
+  {
+    "path": "/api/workbench/projects",
+    "status": 401,
+    "contentType": "application/json",
+    "csp": true
+  },
+  {
+    "path": "/api/me",
+    "status": 401,
+    "contentType": "application/json",
+    "csp": true
+  },
+  {
+    "path": "/auth/login",
+    "status": 302,
+    "contentType": null,
+    "csp": true,
+    "redirectHost": "mnmll494.cloudflareaccess.com",
+    "PKCE": [
+      "S256"
+    ],
+    "callback": [
+      "https://azrail-pulse-staging.mnmllpulse.workers.dev/auth/callback"
+    ],
+    "stateCookie": true
+  },
+  {
+    "asset": "/assets/app.css",
+    "status": 200,
+    "bytes": 15237
+  },
+  {
+    "asset": "/assets/app.js",
+    "status": 200,
+    "bytes": 109073
+  },
+  {
+    "accessFormStatus": 200,
+    "accessHost": "mnmll494.cloudflareaccess.com",
+    "hasEmailInput": true
+  }
+]

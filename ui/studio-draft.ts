@@ -1,13 +1,14 @@
 type Values=Record<string,string>;
 type API=(path:string,options?:RequestInit)=>Promise<any>;
-interface Options {scope?:string;writable?:boolean;preferCurrent?:boolean;}
+interface Options {scope?:string;writable?:boolean;preferCurrent?:boolean;projectId?:string;autosave?:boolean;}
 interface CachedDraft {values:Values;revision:number;dirty:boolean;}
 /** Local history and per-module session drafts never rewind server project data. */
 export function mountStudioDraft(host:HTMLElement,id:string,api:API,cloud:boolean,options:Options={}):()=>void {
  const fields=[...host.querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>('input:not([type=file]):not([type=password]),textarea,select')].filter(e=>!!e.id);
  if(!fields.length)return()=>{};
  const read=()=>Object.fromEntries(fields.map(e=>[e.id,e.value]));
- const defaults=read(),storageKey=`pulse.draft.${options.scope??'local'}.${id}`;
+ const endpoint=`/api/studio/drafts/${id}${options.projectId?'?projectId='+encodeURIComponent(options.projectId):''}`;
+ const defaults=read(),storageKey=`pulse.draft.${options.scope??'local'}${options.projectId?'.'+options.projectId:''}.${id}`;
  const storage=()=>host.ownerDocument.defaultView!.sessionStorage;
  const valid=(values:unknown):values is Values=>!!values&&typeof values==='object'&&!Array.isArray(values)&&Object.entries(values).every(([key,value])=>{
   const field=fields.find(f=>f.id===key);const max=field&&'maxLength' in field&&field.maxLength>0?field.maxLength:20000;
@@ -17,14 +18,14 @@ export function mountStudioDraft(host:HTMLElement,id:string,api:API,cloud:boolea
  try{const value=JSON.parse(storage().getItem(storageKey)??'null');if(valid(value?.values)&&Number.isSafeInteger(value.revision)&&value.revision>=0&&typeof value.dirty==='boolean')cached=value;}catch{}
  if(cached&&!(options.preferCurrent&&fields.some(field=>field.value.trim()!=='')))for(const field of fields)if(typeof cached.values[field.id]==='string')field.value=cached.values[field.id];
  let states:Values[]=[read()],at=0,revision=cached?.revision??0,dirty=cached?.dirty??false;
- let loaded=!cloud,saving=false,loading=false,disposed=false;
+ let loaded=!cloud,saving=false,loading=false,disposed=false,autosaveTimer=0;
  const writable=options.writable!==false;
  const writeCache=()=>{try{storage().setItem(storageKey,JSON.stringify({values:read(),revision,dirty}));}catch{}};
  const bar=document.createElement('div');bar.className='toolbar draft-toolbar';
  const status=document.createElement('span');status.className='muted';status.setAttribute('role','status');status.textContent=cloud?'Загружаю черновик…':cached?'Черновик восстановлен в этой вкладке':'Черновик в этой вкладке';
  const button=(name:string,action:()=>void)=>{const b=document.createElement('button');b.type='button';b.textContent=name;b.onclick=action;bar.append(b);return b;};
  const apply=(values:Values)=>{for(const field of fields)if(typeof values[field.id]==='string')field.value=values[field.id];update();};
- const record=()=>{const next=read();if(JSON.stringify(states[at])===JSON.stringify(next))return;states=states.slice(0,at+1);states.push(next);if(states.length>40)states.shift();at=states.length-1;dirty=true;writeCache();status.textContent='Есть несохранённые изменения';update();};
+ const record=()=>{const next=read();if(JSON.stringify(states[at])===JSON.stringify(next))return;states=states.slice(0,at+1);states.push(next);if(states.length>40)states.shift();at=states.length-1;dirty=true;writeCache();status.textContent='Есть несохранённые изменения';update();if(options.autosave&&cloud){clearTimeout(autosaveTimer);autosaveTimer=window.setTimeout(()=>void persist(),1500);}};
  const history=(position:number)=>{at=position;apply(states[at]);dirty=true;writeCache();status.textContent='Есть несохранённые изменения';};
  const undo=button('↶ Отменить',()=>{if(at)history(at-1);});
  const redo=button('↷ Повторить',()=>{if(at<states.length-1)history(at+1);});
@@ -36,7 +37,7 @@ export function mountStudioDraft(host:HTMLElement,id:string,api:API,cloud:boolea
  async function load(explicit=false){
   if(loading||saving||disposed)return;loading=true;update();const start=JSON.stringify(read());
   try{
-   const r=await api(`/api/studio/drafts/${id}`);if(disposed)return;
+   const r=await api(endpoint);if(disposed)return;
    if(!Number.isSafeInteger(r.revision)||r.revision<0||!valid(r.values))throw Error('Некорректный черновик сервера.');
    // An automatic load cannot silently adopt a newer revision and overwrite it.
    if(!explicit&&dirty&&revision!==r.revision){loaded=false;status.textContent='На сервере другая версия. Ваш текст сохранён в этой вкладке. Загрузите сохранённый черновик перед записью.';return;}
@@ -51,11 +52,11 @@ export function mountStudioDraft(host:HTMLElement,id:string,api:API,cloud:boolea
  async function persist(){
   if(!writable||!loaded||saving||loading||disposed)return;saving=true;update();const values=read();
   try{
-   const r=await api(`/api/studio/drafts/${id}`,{method:'PUT',body:JSON.stringify({baseRevision:revision,values})});if(disposed)return;
+   const r=await api(endpoint,{method:'PUT',body:JSON.stringify({baseRevision:revision,values})});if(disposed)return;
    revision=r.revision;dirty=JSON.stringify(values)!==JSON.stringify(read());writeCache();status.textContent=dirty?'Сохранено; есть новые правки':'Сохранено на сервере';
   }catch(e){if(!disposed)status.textContent=e instanceof Error?e.message:'Не удалось сохранить';}
   finally{saving=false;if(!disposed)update();}
  }
  fields.forEach(f=>f.addEventListener('input',record));update();if(cloud)void load();
- return()=>{if(disposed)return;record();writeCache();disposed=true;fields.forEach(f=>f.removeEventListener('input',record));bar.remove();};
+ return()=>{if(disposed)return;clearTimeout(autosaveTimer);record();clearTimeout(autosaveTimer);writeCache();disposed=true;fields.forEach(f=>f.removeEventListener('input',record));bar.remove();};
 }

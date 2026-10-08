@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "es2022",
     "lib": ["es2022"],
-    "module": "es2022",
+    "module": "esnext",
     "moduleResolution": "bundler",
     "types": ["@cloudflare/workers-types", "node"],
     "strict": true,
@@ -14,7 +14,9 @@
     "noUnusedParameters": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true
   },
   "include": ["src/**/*.ts"]
 }

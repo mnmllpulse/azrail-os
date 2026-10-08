@@ -17,6 +17,10 @@ export default defineConfig({
     },
   ],
   test: {
+    // Keep parallel suites inside small local/CI memory limits.
+    maxWorkers: 2,
+    globals: true,
+    environment: "node",
     include: ["tests/**/*.test.ts"],
     server: {
       // Без inline vitest не трогает node_modules, и подмена не применяется

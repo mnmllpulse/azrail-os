@@ -94,3 +94,8 @@ Read-only smoke: `npm run smoke`. Для OIDC передайте `AZRAIL_URL` и
 - `/api/upload`
 
 Новые студийные API: `/api/studio/projects`, `/api/studio/project-zip`, `/api/studio/artifacts`, `/api/studio/image`, `/api/studio/voice`, `/api/studio/als`, `/api/studio/ledger`, `/api/studio/capabilities`. Подключения: `/api/connectors`; черновики: `/api/studio/drafts/:studio`; стиль: `/api/studio/design-contract?projectId=...`. OIDC: `/auth/login`, `/auth/callback`, `/auth/status`, `/auth/logout`.
+# AZRAIL Workbench 1.5 release candidate
+
+Новый интерфейс проекта: чат, файлы и редактор с проверкой конфликтов, статический просмотр, запуск в настроенной песочнице, плагины, память, версии и настройки модели. Описание и ограничения: [WORKBENCH_RELEASE_RU.md](docs/WORKBENCH_RELEASE_RU.md).
+
+API проектов: `GET/POST /api/projects` и `GET /api/projects/:id/workspace` сохраняют совместимость. Изменение проекта выполняется через `/api/workbench/projects/:id` с `baseRevision`. Для проекта добавлены `/files`, `/file`, `/rename`, `/preview`, `/runtime`, `/chat`, `/memory`, `/versions`, `/plugins`, `/model`; каталог — `/api/plugins/catalog` и `/api/workbench/models`. Все запросы проходят проверку аккаунта и владельца проекта. Запуск песочницы требует разрешения и Idempotency-Key.

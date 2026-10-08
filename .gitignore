@@ -1,4 +1,5 @@
 node_modules/
+/node_modules
 .env
 .wrangler/
 dist/
@@ -18,3 +19,6 @@ site/
 .env
 .env.*
 !.env.example
+
+# Per-account staging deployment configuration
+wrangler.staging.local.toml

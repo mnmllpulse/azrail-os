@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { workbenchMigrationPlan } from './migration-plan.mjs';
+import { parseGuardConfig } from './check-staging.mjs';
 
 // Inspection is the default. Remote writes need an explicit --remote --apply.
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -17,9 +19,16 @@ if(args.some(a=>!allowed.has(a)) || (args.includes('--remote')&&args.includes('-
   throw Error('Usage: npm run db:migrate -- [--local|--remote] [--apply] [--config file.toml]');
 }
 config = resolve(root,config);
-readFileSync(config); // Fail before inspection when the selected config does not exist.
+const configText = readFileSync(config, 'utf8'); // Fail before inspection when the selected config does not exist.
 const location = args.includes('--remote') ? '--remote' : '--local';
 const apply = args.includes('--apply');
+let backupBucket;
+if (location === '--remote' && apply) {
+  const selected = parseGuardConfig(configText, config.endsWith('.json') ? 'json' : 'toml');
+  const buckets = selected.r2_buckets?.filter(binding => binding.binding === 'AZRAIL_R2');
+  if (!buckets || buckets.length !== 1 || !buckets[0].bucket_name) throw Error('Exactly one AZRAIL_R2 backup bucket is required in deployment config');
+  backupBucket = buckets[0].bucket_name;
+}
 const wrangler = resolve(root, 'node_modules/wrangler/bin/wrangler.js');
 const run = (...params) => execFileSync(process.execPath, [wrangler, ...params, '--config', config], {
   cwd:root, encoding:'utf8', maxBuffer:32*1024*1024,
@@ -45,6 +54,10 @@ if (!tables.has('missions')) {
   for (const file of ['003-bench.sql', '004-security-hardening.sql', '005-platform.sql', '006-model-policy.sql', '007-mission-hints.sql', '008-unified.sql', '009-connectors-drafts.sql']) {
     sql.push(readFileSync(resolve(root, 'migrations', file), 'utf8'));
   }
+  // Inspect additive columns instead of replaying ALTER statements. A retry
+  // after a partial migration must preserve data and succeed safely.
+  sql.push(workbenchMigrationPlan(file=>readFileSync(resolve(root,'migrations',file),'utf8'),
+    table=>new Set(query(`PRAGMA table_info('${table}')`).map(r=>r.name))));
 }
 mkdirSync(resolve(root, '.work'), { recursive: true });
 const plan = resolve(root, '.work/migration-plan.sql');
@@ -53,23 +66,22 @@ console.log(`Config: ${config}. Target: ${location}. SQL plan: ${plan}`);
 if (!apply) {
   console.log('Inspection only. Add --apply to execute the plan. No remote data changed.');
 } else {
-  // Save an independent SQL export BEFORE changing the schema. A failed export
-  // aborts the update. R2 is separate: see the restore checklist in the guide.
+  // Save an independent SQL export BEFORE changing the schema. Remote updates
+  // also require its upload to the selected environment's private R2 bucket.
+  // A failed export or upload aborts the schema update.
   mkdirSync(resolve(root, 'backups'), { recursive: true });
   const stamp = new Date().toISOString().replaceAll(':', '-');
   const backup = resolve(root, `backups/d1-before-${stamp}.sql`);
   run('d1', 'export', 'AZRAIL_D1', location, '--output', backup);
   console.log(`D1 backup: ${backup}`);
-  if(location === '--remote' && config.endsWith('.json')) {
-    const selected=JSON.parse(readFileSync(config,'utf8'));
-    const bucket=selected.r2_buckets?.find(b=>b.binding==='AZRAIL_R2')?.bucket_name;
-    if(!bucket)throw Error('No backup bucket in deployment config');
-    run('r2','object','put',`${bucket}/ops/backups/d1-before-${stamp}.sql`,'--file',backup,'--remote');
+  if(location === '--remote') {
+    run('r2','object','put',`${backupBucket}/ops/backups/d1-before-${stamp}.sql`,'--file',backup,'--remote');
     console.log('Independent pre-migration backup copied to private R2.');
   }
   console.log(run('d1', 'execute', 'AZRAIL_D1', location, '--file', plan, '--yes'));
   const required = ['access_accounts','resource_owners','operation_locks','mission_outbox',
-    'mission_checkpoints','model_calls','backup_manifests','workspace_heads','request_quotas','bench_runs','model_routing_settings','mission_hints','web_sessions','resource_ledger','studio_artifacts','studio_drafts','connector_connections','connector_calls','connector_oauth_states','project_design_contracts'];
+    'mission_checkpoints','model_calls','backup_manifests','workspace_heads','request_quotas','bench_runs','model_routing_settings','mission_hints','web_sessions','resource_ledger','studio_artifacts','studio_drafts','connector_connections','connector_calls','connector_oauth_states','project_design_contracts',
+    'project_workbench','workbench_previews','workbench_version_manifests','project_studio_drafts','studio_storage_accounts','studio_storage_reservations','project_plugin_policies','connector_oauth_refresh','project_model_settings'];
   const after = new Set(query("SELECT name FROM sqlite_master WHERE type='table'").map(r => r.name));
   if (required.some(name => !after.has(name))) throw Error('Migration incomplete. Keep Worker on the previous version.');
   console.log('Schema verified. Worker deployment has not been run.');

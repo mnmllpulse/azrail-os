@@ -1,3 +1,4 @@
+import { withModelSettings } from "../lib/model-settings-context";
 import {readDesignContract,designInstruction,DEFAULT_DESIGN} from '../unified/design-contract';
 import { withBillingScope, projectBillingScope } from "../lib/billing-context";
 import { Agent } from "agents";
@@ -101,7 +102,7 @@ export class UiAgent extends Agent<Env, UiAgentState> {
   }
 
   async run(request: TaskRequest): Promise<TaskResult> {
-    return withBillingScope(request._billingScope ?? projectBillingScope(request.projectId), () => this.runScoped(request));
+    return withModelSettings(request, () => withBillingScope(request._billingScope ?? projectBillingScope(request.projectId), () => this.runScoped(request)));
   }
 
   private async runScoped(request: TaskRequest): Promise<TaskResult> {

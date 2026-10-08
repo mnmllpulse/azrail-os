@@ -1,23 +1,24 @@
 import type {Env} from '../types';
-import {AccessError,authenticate,hashToken,activeAccount} from '../lib/accounts';
+import {AccessError,authenticate,hashToken,activeAccount,requireResource} from '../lib/accounts';
 import {readJsonRecord} from './request-json';
 import {connectorPolicies,findPolicy,toolRisk,type ConnectorPolicy} from './connector-policy';
 import {seal,unseal,canonical} from './connector-vault';
 import {MCPClient,type MCPTool} from './mcp-client';
 import {ensureBudget,reserve,settle,BudgetError} from './ledger';
 import {boundedStructure,validateArguments} from './connector-schema';
-import {startConnectorOAuth,finishConnectorOAuth} from './connector-oauth';
+import {startConnectorOAuth,finishConnectorOAuth,connectorAccessToken} from './connector-oauth';
+import {projectAllowsConnector,readProjectPlugins,requireProjectConnectorTool} from './plugin-policy';
 
 interface Connection {id:string;account_id:string;endpoint_key:string;label:string;secret_cipher:string;revision:number;tools_json:string;tools_digest:string;verified_at:number|null;disabled:number;}
-interface Call {id:string;account_id:string;connection_id:string;connection_revision:number;request_key:string;tool_name:string;arguments_cipher:string;arguments_digest:string;tools_digest:string;policy_digest:string;approval_needed:number;approved_at:number|null;status:string;result_cipher:string|null;error_code:string|null;expires_at:number;created_at:number;updated_at:number;}
+interface Call {project_id:string|null;plugin_revision:number|null;id:string;account_id:string;connection_id:string;connection_revision:number;request_key:string;tool_name:string;arguments_cipher:string;arguments_digest:string;tools_digest:string;policy_digest:string;approval_needed:number;approved_at:number|null;status:string;result_cipher:string|null;error_code:string|null;expires_at:number;created_at:number;updated_at:number;}
 const ID=/^[a-zA-Z0-9_-]{12,128}$/;
 const secretBinding=(c:Pick<Connection,'account_id'|'id'>)=>`connector:${c.account_id}:${c.id}`;
 const callBinding=(c:Pick<Call,'account_id'|'id'>)=>`call:${c.account_id}:${c.id}`;
 async function connection(env:Env,account:string,id:string) {const c=await env.AZRAIL_D1.prepare('SELECT * FROM connector_connections WHERE id=? AND account_id=? AND disabled=0').bind(id,account).first<Connection>();if(!c)throw new AccessError('Подключение недоступно.',404);return c;}
 async function callRecord(env:Env,account:string,id:string){const c=await env.AZRAIL_D1.prepare('SELECT * FROM connector_calls WHERE id=? AND account_id=?').bind(id,account).first<Call>();if(!c)throw new AccessError('Операция недоступна.',404);return c;}
 function publicConnection(c:Connection) {return {id:c.id,endpointKey:c.endpoint_key,label:c.label,revision:c.revision,verifiedAt:c.verified_at,toolCount:(JSON.parse(c.tools_json) as unknown[]).length};}
-async function publicCall(env:Env,c:Call,details=false) {const label=details?await env.AZRAIL_D1.prepare('SELECT label FROM connector_connections WHERE id=? AND account_id=?').bind(c.connection_id,c.account_id).first<{label:string}>():null;return {id:c.id,...(label?{connectionLabel:label.label}:{}),connectionId:c.connection_id,tool:c.tool_name,status:c.status,approvalRequired:!!c.approval_needed&&!c.approved_at,expiresAt:c.expires_at,createdAt:c.created_at,error:c.error_code,...(details?{arguments:await unseal(env,callBinding(c)+':args',c.arguments_cipher),result:c.result_cipher?await unseal(env,callBinding(c)+':result',c.result_cipher):null}:{})};}
-async function client(env:Env,c:Connection,p:ConnectorPolicy){const s=await unseal<{token:string;expiresAt?:number}>(env,secretBinding(c),c.secret_cipher);if(s.expiresAt&&s.expiresAt<=Date.now())throw new AccessError('Токен сервиса истёк. Подключите сервис заново.',401);return new MCPClient(p.url,s.token);}
+async function publicCall(env:Env,c:Call,details=false) {const label=details?await env.AZRAIL_D1.prepare('SELECT label FROM connector_connections WHERE id=? AND account_id=?').bind(c.connection_id,c.account_id).first<{label:string}>():null;return {id:c.id,projectId:c.project_id,...(label?{connectionLabel:label.label}:{}),connectionId:c.connection_id,tool:c.tool_name,status:c.status,approvalRequired:!!c.approval_needed&&!c.approved_at,expiresAt:c.expires_at,createdAt:c.created_at,error:c.error_code,...(details?{arguments:await unseal(env,callBinding(c)+':args',c.arguments_cipher),result:c.result_cipher?await unseal(env,callBinding(c)+':result',c.result_cipher):null}:{})};}
+async function client(env:Env,c:Connection,p:ConnectorPolicy){return new MCPClient(p.url,await connectorAccessToken(env,c,p));}
 async function allowance(env:Env,account:string,p:ConnectorPolicy,id:string){const scope=`connector:${account}:${p.id}:${new Date().toISOString().slice(0,10)}`;await ensureBudget(env,scope,'request',p.dailyCalls);await env.AZRAIL_D1.prepare('UPDATE resource_budgets SET limit_units=? WHERE scope=? AND unit=?').bind(p.dailyCalls,scope,'request').run();await reserve(env,{id,scope,unit:'request',resource:`mcp:${p.id}`,upperBound:1,fingerprint:id});}
 export async function discoverConnection(env:Env,account:string,id:string) {
  const c=await connection(env,account,id),p=findPolicy(env,c.endpoint_key),rpc=await client(env,c,p),reservation=crypto.randomUUID();
@@ -26,18 +27,20 @@ export async function discoverConnection(env:Env,account:string,id:string) {
  catch(e){await settle(env,reservation,1,'MCP discovery failed; request budget retained');if(e instanceof AccessError)throw e;throw new AccessError('Проверка MCP не завершена. Проверьте адрес, токен и совместимость протокола.',502);}
  finally{await rpc.close();}
 }
-export async function searchConnectorTools(env:Env,account:string,query:string,limit=5) {
+export async function searchConnectorTools(env:Env,account:string,query:string,limit=5,projectId?:string) {
+ const projectPolicy=await readProjectPlugins(env,projectId);
  const rows=await env.AZRAIL_D1.prepare('SELECT * FROM connector_connections WHERE account_id=? AND disabled=0 AND verified_at>? ORDER BY updated_at DESC LIMIT 100').bind(account,Date.now()-86400000).all<Connection>();
  const words=query.toLocaleLowerCase().split(/[^\p{L}\p{N}_]+/u).filter(Boolean).slice(0,20);const results=[];
- for(const c of rows.results){let p:ConnectorPolicy;try{p=findPolicy(env,c.endpoint_key);}catch{continue;}for(const t of JSON.parse(c.tools_json) as MCPTool[]){const risk=toolRisk(p,t.name);if(risk==='blocked')continue;const hay=(t.name+' '+t.description+' '+c.label).toLocaleLowerCase();const score=words.reduce((n,w)=>n+(hay.includes(w)?1:0),0);if(words.length&&!score)continue;results.push({connectionId:c.id,connection:c.label,name:t.name,description:t.description,inputSchema:t.inputSchema,risk,score});}}
+ for(const c of rows.results){let p:ConnectorPolicy;try{p=findPolicy(env,c.endpoint_key);}catch{continue;}for(const t of JSON.parse(c.tools_json) as MCPTool[]){const risk=toolRisk(p,t.name);if(risk==='blocked'||!projectAllowsConnector(projectPolicy,c.endpoint_key,c.id,t.name))continue;const hay=(t.name+' '+t.description+' '+c.label).toLocaleLowerCase();const score=words.reduce((n,w)=>n+(hay.includes(w)?1:0),0);if(words.length&&!score)continue;results.push({connectionId:c.id,connection:c.label,name:t.name,description:t.description,inputSchema:t.inputSchema,risk,score});}}
  return results.sort((a,b)=>b.score-a.score||a.name.localeCompare(b.name)).slice(0,Math.max(1,Math.min(5,limit)));
 }
 /** All arguments are immutable after preparation. Approval binds to exactly this
  * connection revision, tool catalog, policy and arguments digest. */
-export async function prepareConnectorCall(env:Env,account:string,input:{connectionId:string;tool:string;arguments:Record<string,unknown>;idempotencyKey:string}) {
+export async function prepareConnectorCall(env:Env,account:string,input:{connectionId:string;tool:string;arguments:Record<string,unknown>;idempotencyKey:string;projectId?:string}) {
  if(!ID.test(input.idempotencyKey)||typeof input.tool!=='string'||!input.arguments||typeof input.arguments!=='object'||Array.isArray(input.arguments)||JSON.stringify(input.arguments).length>16000)throw new AccessError('Некорректные параметры операции.',400);
  boundedStructure(input.arguments);
- const fingerprint=await hashToken(canonical({connectionId:input.connectionId,tool:input.tool,arguments:input.arguments}));
+ const pluginRevision=input.projectId?await requireProjectConnectorTool(env,input.projectId,account,input.connectionId,input.tool):null;
+ const fingerprint=await hashToken(canonical({connectionId:input.connectionId,tool:input.tool,arguments:input.arguments,...(input.projectId?{projectId:input.projectId}:{})}));
  const old=await env.AZRAIL_D1.prepare('SELECT * FROM connector_calls WHERE account_id=? AND request_key=?').bind(account,input.idempotencyKey).first<Call>();
  if(old){if(old.arguments_digest!==fingerprint)throw new AccessError('Ключ уже связан с другой операцией.',409);return publicCall(env,old,true);}
  const c=await connection(env,account,input.connectionId),p=findPolicy(env,c.endpoint_key),risk=toolRisk(p,input.tool);
@@ -46,13 +49,14 @@ export async function prepareConnectorCall(env:Env,account:string,input:{connect
  const definition=(JSON.parse(c.tools_json) as MCPTool[]).find(t=>t.name===input.tool)!;validateArguments(definition.inputSchema,input.arguments);
  const pending=await env.AZRAIL_D1.prepare("SELECT COUNT(*) AS n FROM connector_calls WHERE account_id=? AND status='prepared' AND expires_at>?").bind(account,Date.now()).first<{n:number}>();if((pending?.n??0)>=50)throw new AccessError('Слишком много неподтверждённых операций.',429);
  const id=crypto.randomUUID(),now=Date.now(),binding=callBinding({id,account_id:account});
- await env.AZRAIL_D1.prepare(`INSERT INTO connector_calls(id,account_id,connection_id,connection_revision,request_key,tool_name,arguments_cipher,arguments_digest,tools_digest,policy_digest,approval_needed,status,expires_at,created_at,updated_at)
- VALUES(?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?,?) ON CONFLICT(account_id,request_key) DO NOTHING`).bind(id,account,c.id,c.revision,input.idempotencyKey,input.tool,await seal(env,binding+':args',input.arguments),fingerprint,c.tools_digest,await hashToken(canonical(p)),risk==='read'?0:1,now+600000,now,now).run();
+ await env.AZRAIL_D1.prepare(`INSERT INTO connector_calls(id,account_id,connection_id,connection_revision,request_key,tool_name,arguments_cipher,arguments_digest,tools_digest,policy_digest,approval_needed,status,expires_at,created_at,updated_at,project_id,plugin_revision)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?,?,?,?) ON CONFLICT(account_id,request_key) DO NOTHING`).bind(id,account,c.id,c.revision,input.idempotencyKey,input.tool,await seal(env,binding+':args',input.arguments),fingerprint,c.tools_digest,await hashToken(canonical(p)),risk==='read'?0:1,now+600000,now,now,input.projectId??null,pluginRevision).run();
  const row=await env.AZRAIL_D1.prepare('SELECT * FROM connector_calls WHERE account_id=? AND request_key=?').bind(account,input.idempotencyKey).first<Call>();if(!row||row.arguments_digest!==fingerprint)throw new AccessError('Конфликт ключа операции.',409);
  return publicCall(env,row,true);
 }
 export async function executeConnectorCall(env:Env,account:string,id:string,confirmed=false) {
  let row=await callRecord(env,account,id);
+ await checkCallProject(env,account,row);
  if(row.status==='succeeded'||row.status==='failed'){
   if(row.result_cipher)await settle(env,id,1,'Stored MCP response reconciled');
   return publicCall(env,row,true);
@@ -71,6 +75,7 @@ export async function executeConnectorCall(env:Env,account:string,id:string,conf
   await allowance(env,account,p,id);reserved=true;
   await rpc.initialize();const tools=await rpc.listTools();if(await hashToken(canonical(tools))!==row.tools_digest)throw new AccessError('Описание инструментов изменилось. Обновите подключение и подтвердите заново.',409);
   const still=await connection(env,account,c.id);if(still.revision!==c.revision)throw new AccessError('Подключение было изменено.',409);
+  await checkCallProject(env,account,row);
   dispatched=true;const result=await rpc.call(row.tool_name,args,tools.find(t=>t.name===row.tool_name)?.outputSchema);const cipher=await seal(env,callBinding(row)+':result',result);
   await env.AZRAIL_D1.prepare("UPDATE connector_calls SET status=?,result_cipher=?,updated_at=? WHERE id=? AND account_id=? AND status='running'").bind(result?.isError?'failed':'succeeded',cipher,Date.now(),id,account).run();
   responseStored=true;
@@ -90,11 +95,13 @@ export async function connectorRoute(request:Request,env:Env):Promise<Response|n
  const auth=await authenticate(request,env);if(!auth.ok)return Response.json({error:auth.error},{status:401});const principal=auth.principal!,account=principal.id;
  if(principal.role==='viewer'&&request.method!=='GET')throw new AccessError('Роль разрешает только чтение.');
  const parts=url.pathname.split('/').filter(Boolean).slice(2),head=parts[0];
+ const projectId=url.searchParams.get('projectId')??undefined;
+ if(projectId){if(!/^[A-Za-z0-9_-]{1,128}$/.test(projectId))throw new AccessError('Некорректный projectId.',400);await requireResource(env,principal,'project',projectId);if(await projectConnectorOwner(env,projectId)!==account)throw new AccessError('Подключения проекта недоступны.',404);}
  if(head==='oauth'&&parts[1]==='callback'&&request.method==='GET')return finishConnectorOAuth(request,env,account);
  if(request.method==='GET'){
   if(!head){const rows=await env.AZRAIL_D1.prepare('SELECT * FROM connector_connections WHERE account_id=? AND disabled=0 ORDER BY updated_at DESC LIMIT 100').bind(account).all<Connection>();return Response.json({catalog:connectorPolicies(env).map(p=>({id:p.id,name:p.name,auth:p.auth,dailyCalls:p.dailyCalls})),connections:rows.results.map(publicConnection),vaultConfigured:!!env.INTEGRATION_KEY});}
-  if(head==='tools')return Response.json({tools:await searchConnectorTools(env,account,(url.searchParams.get('q')??'').slice(0,500))});
-  if(head==='calls'){if(parts[1])return Response.json(await publicCall(env,await callRecord(env,account,parts[1]),true));const rows=await env.AZRAIL_D1.prepare('SELECT * FROM connector_calls WHERE account_id=? ORDER BY created_at DESC LIMIT 50').bind(account).all<Call>();return Response.json({calls:await Promise.all(rows.results.map(r=>publicCall(env,r)))});}
+  if(head==='tools')return Response.json({tools:await searchConnectorTools(env,account,(url.searchParams.get('q')??'').slice(0,500),5,projectId)});
+  if(head==='calls'){if(parts[1])return Response.json(await connectorResult(env,account,parts[1],projectId));const rows=await (projectId?env.AZRAIL_D1.prepare('SELECT * FROM connector_calls WHERE account_id=? AND project_id=? ORDER BY created_at DESC LIMIT 50').bind(account,projectId):env.AZRAIL_D1.prepare('SELECT * FROM connector_calls WHERE account_id=? ORDER BY created_at DESC LIMIT 50').bind(account)).all<Call>();return Response.json({calls:await Promise.all(rows.results.map(r=>publicCall(env,r)))});}
  }
  if(!['POST','PUT','DELETE'].includes(request.method))throw new AccessError('Метод недоступен.',405);
  const body=request.method==='DELETE'?{}:await readJsonRecord(request,24000) as Record<string,any>;
@@ -105,7 +112,7 @@ export async function connectorRoute(request:Request,env:Env):Promise<Response|n
   const id=crypto.randomUUID(),now=Date.now(),label=typeof body.label==='string'?body.label.trim().slice(0,80):p.name;
   const cipher=await seal(env,secretBinding({id,account_id:account}),{token});const inserted=await env.AZRAIL_D1.prepare('INSERT INTO connector_connections(id,account_id,endpoint_key,label,secret_cipher,created_at,updated_at) SELECT ?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM connector_connections WHERE account_id=? AND disabled=0)<30 RETURNING id').bind(id,account,p.id,label||p.name,cipher,now,now,account).first();if(!inserted)throw new AccessError('Лимит: 30 подключений на аккаунт.',429);return Response.json({id},{status:201});
  }
- if(head==='prepare'&&request.method==='POST')return Response.json(await prepareConnectorCall(env,account,{connectionId:String(body.connectionId??''),tool:String(body.tool??''),arguments:body.arguments,idempotencyKey:request.headers.get('Idempotency-Key')??''}),{status:201});
+ if(head==='prepare'&&request.method==='POST'){const project=body.projectId??projectId;if(project!==undefined){if(typeof project!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(project))throw new AccessError('Некорректный projectId.',400);await requireResource(env,principal,'project',project);}return Response.json(await prepareConnectorCall(env,account,{connectionId:String(body.connectionId??''),tool:String(body.tool??''),arguments:body.arguments,idempotencyKey:request.headers.get('Idempotency-Key')??'',projectId:project}),{status:201});}
  if(head==='calls'&&parts[1]){
   if(parts[2]==='execute'&&request.method==='POST')return Response.json(await executeConnectorCall(env,account,parts[1],body.confirm===true));
   if(parts[2]==='cancel'&&request.method==='POST'){await callRecord(env,account,parts[1]);const row=await env.AZRAIL_D1.prepare("UPDATE connector_calls SET status='cancelled',updated_at=? WHERE id=? AND account_id=? AND status='prepared' RETURNING id").bind(Date.now(),parts[1],account).first();if(!row)throw new AccessError('Можно отменить только ещё не отправленную операцию.',409);return Response.json({cancelled:true});}
@@ -117,4 +124,12 @@ export async function connectorRoute(request:Request,env:Env):Promise<Response|n
 /** Server-derived ownership: a model cannot choose an account or a secret. */
 export async function projectConnectorOwner(env:Env,project:string) {const row=await env.AZRAIL_D1.prepare("SELECT account_id FROM resource_owners WHERE kind='project' AND resource_id=?").bind(project).first<{account_id:string}>();if(!row||!await activeAccount(env,row.account_id))throw new AccessError('Нет активного владельца проекта.');return row.account_id;}
 
-export async function connectorResult(env:Env,account:string,id:string){return publicCall(env,await callRecord(env,account,id),true);}
+async function checkCallProject(env:Env,account:string,row:Call,projectId?:string) {
+ if(projectId && row.project_id!==projectId) {
+  // Legacy account-level results stay compatible only until a project opts in.
+  const policy=await readProjectPlugins(env,projectId);
+  if(row.project_id||policy.configured)throw new AccessError('Операция принадлежит другому проекту.',404);
+ }
+ if(row.project_id){const revision=await requireProjectConnectorTool(env,row.project_id,account,row.connection_id,row.tool_name);if(revision!==row.plugin_revision&&row.status==='prepared')throw new AccessError('Плагины проекта изменились. Подготовьте новую операцию.',409);}
+}
+export async function connectorResult(env:Env,account:string,id:string,projectId?:string){const row=await callRecord(env,account,id);await checkCallProject(env,account,row,projectId);return publicCall(env,row,true);}

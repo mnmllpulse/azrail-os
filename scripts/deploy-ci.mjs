@@ -18,6 +18,6 @@ run(['scripts/migrate.mjs','--remote','--apply','--config',cfg]);
 const wrangler='node_modules/wrangler/bin/wrangler.js';
 // Secret values go through stdin, never command arguments or logs. Missing
 // variables preserve the existing deployed secret, including the stable vault key.
-const secrets=Object.fromEntries(['OIDC_CLIENT_SECRET','INTEGRATION_KEY','MCP_OAUTH_SECRETS'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]));
+const secrets=Object.fromEntries(['OIDC_CLIENT_SECRET','INTEGRATION_KEY','MCP_OAUTH_SECRETS','OPENAI_API_KEY'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]));
 if(Object.keys(secrets).length)run([wrangler,'secret','bulk','--config',cfg],JSON.stringify(secrets));
 run([wrangler,'deploy','--config',cfg]);

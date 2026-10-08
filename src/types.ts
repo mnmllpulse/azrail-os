@@ -14,6 +14,12 @@ export interface Env {
   /** Operator-approved exact remote MCP endpoints; empty by default. */
   MCP_SERVERS?: string;
   MCP_OAUTH_SECRETS?: string;
+  STUDIO_STORAGE_MAX_BYTES?: string;
+  STUDIO_STORAGE_MAX_FILES?: string;
+  /** Dedicated preview origin; must never be the application origin. */
+  SANDBOX_PREVIEW_HOSTNAME?: string;
+  /** Server secret, never exposed through model configuration APIs. */
+  OPENAI_API_KEY?: string;
 
   AZRAIL_FORCE_FREE?: string;
   AZRAIL_WORKERS_PLAN?: "free" | "paid";
@@ -190,6 +196,9 @@ export interface TaskRequest {
   /** Явный слаг модели из реестра — обходит автоматический выбор по тиру.
    *  См. RunOptions.preferredModel в lib/model-router.ts за причиной. */
   preferredModel?: string;
+  skillIds?: string[];
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  maxCostUsd?: number;
   /** Диалог, к которому относится задача. Хранится в D1 (lib/chat-store.ts),
    *  а не в памяти конкретного Durable Object: диалогов много, и они должны
    *  переживать выгрузку объекта. */
