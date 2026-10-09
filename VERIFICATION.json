@@ -4,7 +4,7 @@
   "inputArchive": "AZRAIL_PULSE_Unified_1.4.0.zip",
   "inputSha256": "1d4aa9e5a4939d1d29495f40cce8924e478864c9c402a8bd66509fefd5292bf5",
   "repositoryBaseline": "a47b688939a55c567a32aba57a50c38e3f894021",
-  "branch": "codex/azrail-unified-workbench",
+  "branch": "codex/azrail-workbench-staging-20261008",
   "checks": {
     "tests": 1284,
     "suites": 66,
@@ -24,15 +24,23 @@
   ],
   "report": "docs/WORKBENCH_RELEASE_RU.md",
   "staging": {
-    "date": "2026-10-08",
+    "date": "2026-10-09",
     "origin": "https://azrail-pulse-staging.mnmllpulse.workers.dev",
-    "deploymentId": "6ee75b49e9334e4d9daf6e3bad8e8d03",
-    "tests": 1296,
-    "suites": 67,
+    "deploymentId": "159daae0edaf4b7abe853760974a5aa9",
+    "tests": 1307,
+    "suites": 68,
     "typecheck": "passed",
     "dryRun": "passed",
-    "http": "passed (unauthenticated UI/API and redirect to Access form)",
-    "liveUserLogin": "pending user OTP",
-    "report": "docs/STAGING_STATUS_RU.md"
+    "http": "passed: 14 unauthenticated HTTP checks; all 10 published assets match SHA-256",
+    "liveUserLogin": "confirmed by account/session and user mission; full acceptance pending",
+    "report": "docs/STAGING_STATUS_RU.md",
+    "uiBuild": "passed",
+    "readinessUI": "DOM tests passed, including partial failures, stale requests and serialized budget save/readback",
+    "missionCatalogue": "admission/catalogue/outbox atomic; owner isolation and rollback tests passed; existing staging project repaired without restart"
+  },
+  "github": {
+    "pullRequest": "https://github.com/mnmllpulse/azrail-os/pull/12",
+    "ci": "last observed job blocked before first step by GitHub account billing issue; local tests passed independently",
+    "observedMain": "a8adecfb79c8b8b1350af1b72c9204ef8044d4a1"
   }
 }

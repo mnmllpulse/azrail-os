@@ -1,0 +1,27 @@
+
+> azrail-pulse-unified@1.5.0-rc.1 check
+> npm run build:ui && npm run typecheck && npm test
+
+
+> azrail-pulse-unified@1.5.0-rc.1 build:ui
+> node scripts/build-ultimate.mjs && node scripts/build-unified.mjs
+
+ultimate.html is self-contained: CSS + JS embedded.
+Hosted UI: 123641 bytes; root index.html is self-contained (182856 bytes).
+
+> azrail-pulse-unified@1.5.0-rc.1 typecheck
+> tsc --noEmit && tsc -p tsconfig.ui.json --noEmit
+
+
+> azrail-pulse-unified@1.5.0-rc.1 test
+> vitest run
+
+
+ RUN  v4.1.11 /workspace/azrail-app
+
+
+ Test Files  68 passed (68)
+      Tests  1307 passed (1307)
+   Start at  11:40:08
+   Duration  23.37s (transform 5.64s, setup 0ms, import 18.97s, tests 9.74s, environment 9ms)
+

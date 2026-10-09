@@ -1,4 +1,5 @@
 import {mountWorkbench,renderProjectHub,type WorkbenchTab} from './workbench';
+import {mountReadiness} from './readiness';
 import {renderMission} from './mission-view';
 import {mountStudioDraft} from './studio-draft';
 import {readPendingImage,requestImage} from './image-request';
@@ -40,8 +41,12 @@ async function api(path:string,options:RequestInit={}) {
 }
 async function blobAPI(path:string){const r=await fetch(path,{credentials:'same-origin',signal:AbortSignal.timeout(90000)});if(!r.ok){const j=await r.json().catch(()=>({}));throw new APIError(j.error??'Не удалось скачать файл.',r.status);}return r.blob();}
 function bind(id:string,fn:()=>unknown){$(id).onclick=()=>Promise.resolve().then(fn).catch(failure);}
-function dialog(title:string,html:string){$('dialog-title').textContent=title;$('dialog-content').innerHTML=html;$<HTMLDialogElement>('dialog').showModal();}
-bind('close-dialog',()=>$<HTMLDialogElement>('dialog').close());
+let dialogCleanup=()=>{};
+function cleanupDialog(){const cleanup=dialogCleanup;dialogCleanup=()=>{};cleanup();}
+function closeDialog(){cleanupDialog();$<HTMLDialogElement>('dialog').close();}
+function dialog(title:string,html:string){cleanupDialog();$('dialog-title').textContent=title;$('dialog-content').innerHTML=html;$<HTMLDialogElement>('dialog').showModal();}
+$('dialog').addEventListener('close',()=>{if(!$<HTMLDialogElement>('dialog').open)cleanupDialog();});
+bind('close-dialog',closeDialog);
 function cleanupMedia(){const cleanup=mediaCleanup;mediaCleanup=()=>{};cleanup();}
 function leaveStudio(){studioEpoch++;studioRun++;draftCleanup();draftCleanup=()=>{};cleanupMedia();lastBlob=null;composerHome.after(composer);missionHome.after(missionPanel);$('studio-work').hidden=true;$('studio-controls').replaceChildren();$('studio-result').replaceChildren();$('studio-result').removeAttribute('aria-busy');}
 function renderRoute(route:Route,initial:boolean){
@@ -73,12 +78,44 @@ async function refreshAccount(){if(local){$('local-notice').textContent='Лок�
 async function refreshMode(){const r=await api('/api/routing-settings');$('mode').textContent=r.policy.allowThirdPartyModels?'Сторонние модели включены':'Сторонние модели выключены';return r;}
 bind('settings',async()=>{
  if(!account)throw Error('Войдите, чтобы посмотреть режим и лимиты.');
- const r=await refreshMode();dialog('Режим и лимиты','<label><input type="checkbox" id="third-party"> Сторонние AI-модели</label><label for="budget">Месячный лимит платных моделей, USD</label><input id="budget" type="number" min="0" step="1"><p id="budget-info"></p><p>OFF блокирует сторонние модели. На Workers Paid даже собственные модели могут расходовать деньги сверх квоты. R2 и Sandbox учитываются отдельно.</p><button id="save-mode" class="primary">Сохранить</button><button id="catalog">Каталог моделей</button>');
- $<HTMLInputElement>('third-party').checked=r.policy.allowThirdPartyModels;$<HTMLInputElement>('budget').value=String(r.policy.monthlyBudgetUsd);$('budget-info').textContent=`Учтено и зарезервировано: $${r.committedUsd.toFixed(4)}. План: ${r.workersPlan}.`;
- $<HTMLButtonElement>('save-mode').disabled=!account.operator;
- if(!account.operator)$('budget-info').textContent+=' Изменения доступны оператору платформы.';
- bind('save-mode',async()=>{await api('/api/admin/routing-settings',{method:'POST',body:JSON.stringify({allowThirdPartyModels:$<HTMLInputElement>('third-party').checked,monthlyBudgetUsd:Number($<HTMLInputElement>('budget').value)})});await refreshMode();notice('Настройки сохранены на сервере.');});
- bind('catalog',async()=>{const cat=await api('/api/model-catalog');const pre=document.createElement('pre');pre.textContent=JSON.stringify(cat,null,2);$('dialog-content').append(pre);});
+ const owner=account.id,selectedProject=project,operator=!!account.operator,controller=new AbortController();
+ dialog('Готовность, режим и лимиты','<div id="readiness-panel"></div><section class="budget-settings"><h3>Режим и лимиты</h3><label><input type="checkbox" id="third-party" disabled> Сторонние AI-модели</label><label for="budget">Месячный лимит платных моделей, USD</label><input id="budget" type="number" min="0" step="1" disabled><p id="budget-info" role="status">Загружаю лимиты…</p><p>Выключенный переключатель блокирует сторонние модели. Расходы Cloudflare Workers AI, R2 и Sandbox учитываются отдельно.</p><button id="save-mode" class="primary" disabled>Сохранить лимиты</button><button id="refresh-limits" type="button">Обновить лимиты</button></section>');
+ const thirdParty=$<HTMLInputElement>('third-party'),budget=$<HTMLInputElement>('budget'),info=$('budget-info'),save=$<HTMLButtonElement>('save-mode');
+ const current=()=>!controller.signal.aborted&&account?.id===owner;
+ const readinessCleanup=mountReadiness($('readiness-panel'),api,{
+  openConnections:()=>{if(current()){closeDialog();void openConnections(selectedProject).catch(failure);}},
+  ...(selectedProject?{openProjectSettings:()=>{if(current()){closeDialog();openProject(selectedProject,'settings');}},openPreview:()=>{if(current()){closeDialog();openProject(selectedProject,'preview');}}}:{}),
+ });
+ dialogCleanup=()=>{controller.abort();readinessCleanup();};
+ const retry=$<HTMLButtonElement>('refresh-limits');
+ let busy=false,loaded=false;
+ const setBusy=(value:boolean)=>{busy=value;retry.disabled=value;thirdParty.disabled=budget.disabled=save.disabled=value||!loaded||!operator;};
+ const showLimits=(r:any)=>{
+  thirdParty.checked=r.policy.allowThirdPartyModels;budget.value=String(r.policy.monthlyBudgetUsd);
+  info.textContent=`Учтено и зарезервировано в денежном бюджете: $${r.committedUsd.toFixed(4)}. План: ${r.workersPlan}. Это не полный счёт Cloudflare.`;
+  if(!operator)info.textContent+=' Изменения доступны оператору платформы.';
+  $('mode').textContent=r.policy.allowThirdPartyModels?'Сторонние модели включены':'Сторонние модели выключены';
+  loaded=true;
+ };
+ const reloadLimits=async()=>{
+  if(!current()||busy)return;setBusy(true);
+  try{const r=await api('/api/routing-settings',{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(15000)])});if(current())showLimits(r);}
+  catch(e){if(current())info.textContent=e instanceof Error?e.message:'Не удалось загрузить лимиты.';}
+  finally{if(current())setBusy(false);}
+ };
+ retry.onclick=()=>{void reloadLimits();};
+ await reloadLimits();
+ save.onclick=async()=>{
+  if(!current()||busy||save.disabled||!operator)return;
+  setBusy(true);
+  try{
+   const limit=Number(budget.value);if(!Number.isFinite(limit)||limit<0)throw Error('Укажите неотрицательный месячный лимит.');
+   await api('/api/admin/routing-settings',{method:'POST',body:JSON.stringify({allowThirdPartyModels:thirdParty.checked,monthlyBudgetUsd:limit})});
+   if(!current())return;
+   const r=await api('/api/routing-settings',{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(15000)])});if(current()){showLimits(r);notice('Настройки сохранены на сервере.');}
+  }catch(e){if(current())info.textContent=e instanceof Error?e.message:'Статус сохранения требует проверки.';}
+  finally{if(current())setBusy(false);}
+ };
 });
 bind('about',()=>dialog('AZRAIL × MNMLL PULSE','<p>Мультиагентное ядро AZRAIL и творческие инструменты PULSE в одном приложении. У каждого модуля студий своя страница.</p><p>Текст и голос → миссия → файлы проекта → проверка. Результат не получает статус готовности к публикации без успешной проверки кода.</p><p>Музыка здесь — локальный алгоритмический синтез. Видео — запись оригинальной анимации. Эти режимы не выдают себя за подключённые музыкальные или видео AI-сервисы.</p>'));
 async function runMission(){
@@ -239,7 +276,7 @@ void lastBlob;
 bind('shortcuts',()=>dialog('Горячие клавиши','<p>Ctrl / ⌘ + Enter — отправить запрос.</p><p>Alt + 1 — создать; Alt + 2 — проекты; Alt + 3 — студии.</p><p>Escape — закрыть окно. Отмена и повтор текста доступны стандартными клавишами редактора.</p>'));
 document.addEventListener('keydown',e=>{if(e.defaultPrevented||e.isComposing)return;if((e.ctrlKey||e.metaKey)&&e.key==='Enter'&&document.activeElement===prompt){e.preventDefault();$('composer').dispatchEvent(new Event('submit',{cancelable:true}));}if(e.altKey&&['1','2','3'].includes(e.key)){e.preventDefault();view((['create','projects','studios'] as const)[Number(e.key)-1]);}});
 
-async function openConnections(){if(!account){dialog('Подключения','<p>Войдите в развёрнутое приложение, чтобы подключать сервисы к своему аккаунту.</p>');return;}dialog('Подключения','<div id="connector-panel"></div>');const {renderConnections}=await import('./connectors');await renderConnections($('connector-panel'),api,project||undefined);}
+async function openConnections(scope=project){if(!account){dialog('Подключения','<p>Войдите в развёрнутое приложение, чтобы подключать сервисы к своему аккаунту.</p>');return;}dialog('Подключения','<div id="connector-panel"></div>');const host=$('connector-panel');const {renderConnections}=await import('./connectors');if(host.isConnected)await renderConnections(host,api,scope||undefined);}
 bind('connections',openConnections);
 
 if(new URLSearchParams(location.search).get('connected')==='1'){notice('Сервис подключён. Откройте Подключения и проверьте соединение.');history.replaceState(null,'',location.pathname+location.hash);}

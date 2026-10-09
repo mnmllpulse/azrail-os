@@ -19,3 +19,43 @@ it('draft endpoints and local caches stay tied to captured project scope',async(
 function application(fetcher:(path:string,options:RequestInit)=>Promise<unknown>,url='https://app.example.com/',project='') {const w=new Window({url,settings:{disableCSSFileLoading:true,disableJavaScriptFileLoading:true}});windows.push(w);const html=readFileSync('index.html','utf8');w.document.write(html.replace(/<script>[\s\S]*?<\/script>/g,''));w.HTMLElement.prototype.scrollIntoView=()=>{};w.URL.createObjectURL=()=> 'blob:https://app.example.com/artifact';w.URL.revokeObjectURL=()=>{};if(project)w.sessionStorage.setItem('pulse.project',project);w.fetch=(async(path:any,options:any={})=>{const result=await fetcher(String(path),options);return result instanceof Response?new w.Response(await result.arrayBuffer(),{status:result.status,headers:result.headers as any}):new w.Response(JSON.stringify(result),{headers:{'Content-Type':'application/json'}});}) as any;w.eval(html.match(/<script>([\s\S]*?)<\/script>/)![1]);return w;}
 it('an attachment completed after creating another project never reaches its mission',async()=>{let finish!:(value:string)=>void;let missionBody:any;const w=application(async(path,options)=>{if(path==='/auth/status')return {account:{id:'alice',name:'Alice'},configured:true};if(path==='/api/routing-settings')return {policy:{allowThirdPartyModels:false}};if(path==='/api/workbench/projects'&&options.method==='POST')return {project:{id:'new',name:'New',revision:0,status:'active'}};if(path==='/api/workbench/projects/new')return {project:{id:'new',name:'New',revision:0,status:'active'}};if(path==='/api/mission'&&options.method==='POST'){missionBody=JSON.parse(String(options.body));return {missionId:'m'};}return {mission:{status:'completed'},result:{summary:'Done'},revision:0,values:{}};});await settle();const input=w.document.getElementById('attachments')!;Object.defineProperty(input,'files',{value:[{name:'secret.txt',size:20,text:()=>new Promise<string>(resolve=>{finish=resolve;})}]});input.dispatchEvent(new w.Event('change'));(w.document.getElementById('new-project') as any).click();await settle();(w.document.getElementById('project-create-name') as any).value='New';w.document.getElementById('project-create-form')!.dispatchEvent(new w.Event('submit',{cancelable:true}));await settle();finish('PRIVATE OLD PROJECT');await settle();(w.document.getElementById('prompt') as any).value='Build new';w.document.getElementById('composer')!.dispatchEvent(new w.Event('submit',{cancelable:true}));await settle();expect(missionBody.projectId).toBe('new');expect(missionBody.message).toBe('Build new');expect(w.document.getElementById('attachment-names')!.textContent).toBe('');});
 it('saving an already generated image assigns its artifact without uploading another blob',async()=>{const calls:Array<{path:string;options:RequestInit}>=[];const w=application(async(path,options)=>{calls.push({path,options});if(path==='/auth/status')return {account:{id:'alice',name:'Alice'},configured:true};if(path==='/api/routing-settings')return {policy:{allowThirdPartyModels:false}};if(path==='/api/studio/image')return {id:'image-1',name:'image.png',url:'/api/studio/artifacts/image-1',projectId:null};if(path==='/api/studio/artifacts/image-1'&&options.method!=='PATCH')return new Response('png',{headers:{'Content-Type':'image/png'}});return {revision:0,values:{}};},'https://app.example.com/studios/image','project-a');await settle();(w.document.getElementById('studio-text') as any).value='Cover';(w.document.getElementById('studio-run') as any).click();await settle();const save=Array.from(w.document.querySelectorAll('#studio-result button')).find(b=>b.textContent==='Назначить текущему проекту') as any;expect(save).toBeTruthy();save.click();await settle();expect(calls.filter(c=>c.path==='/api/studio/artifacts'&&c.options.method==='POST')).toHaveLength(0);expect(JSON.parse(String(calls.find(c=>c.options.method==='PATCH')?.options.body))).toEqual({projectId:'project-a'});});
+
+it('locks budget refresh and repeat saving until the write and its readback both finish',async()=>{
+ const calls:Array<{path:string;options:RequestInit}>=[];
+ let finishSave!:(value:unknown)=>void,finishReadback!:(value:unknown)=>void,committed=false;
+ const pendingSave=new Promise(resolve=>{finishSave=resolve;}),pendingReadback=new Promise(resolve=>{finishReadback=resolve;});
+ const initial={policy:{allowThirdPartyModels:false,monthlyBudgetUsd:10},committedUsd:0,workersPlan:'free'};
+ const w=application(async(path,options)=>{
+  calls.push({path,options});
+  if(path==='/auth/status')return {account:{id:'operator',name:'Operator',operator:true},configured:true};
+  if(path==='/api/admin/routing-settings'){await pendingSave;committed=true;return {ok:true};}
+  if(path==='/api/routing-settings')return committed?pendingReadback:initial;
+  if(path==='/api/workbench/models')return {models:[],configuration:{}};
+  if(path==='/api/connectors')return {catalog:[],connections:[],vaultConfigured:false};
+  if(path==='/api/studio/capabilities')return {image:false,sandbox:false};
+  return {revision:0,values:{}};
+ });
+ await settle();(w.document.getElementById('settings') as any).click();await settle();
+ const save=w.document.getElementById('save-mode') as unknown as HTMLButtonElement;
+ const refresh=w.document.getElementById('refresh-limits') as unknown as HTMLButtonElement;
+ const budget=w.document.getElementById('budget') as unknown as HTMLInputElement;
+ const thirdParty=w.document.getElementById('third-party') as unknown as HTMLInputElement;
+ const reads=()=>calls.filter(call=>call.path==='/api/routing-settings').length;
+ const writes=()=>calls.filter(call=>call.path==='/api/admin/routing-settings');
+ expect(save.disabled).toBe(false);budget.value='25';thirdParty.checked=true;
+ const initialReads=reads();save.click();await settle();
+ expect(writes()).toHaveLength(1);
+ expect(JSON.parse(String(writes()[0].options.body))).toEqual({allowThirdPartyModels:true,monthlyBudgetUsd:25});
+ for(const control of [save,refresh,budget,thirdParty])expect(control.disabled).toBe(true);
+ refresh.click();save.click();await settle();
+ expect(reads()).toBe(initialReads);expect(writes()).toHaveLength(1);
+ finishSave({ok:true});await settle();
+ expect(reads()).toBe(initialReads+1);
+ for(const control of [save,refresh,budget,thirdParty])expect(control.disabled).toBe(true);
+ refresh.click();save.click();await settle();
+ expect(reads()).toBe(initialReads+1);expect(writes()).toHaveLength(1);
+ finishReadback({...initial,policy:{allowThirdPartyModels:true,monthlyBudgetUsd:25}});await settle();
+ for(const control of [save,refresh,budget,thirdParty])expect(control.disabled).toBe(false);
+ expect(budget.value).toBe('25');expect(thirdParty.checked).toBe(true);
+ expect(w.document.getElementById('notice-text')?.textContent).toBe('Настройки сохранены на сервере.');
+});

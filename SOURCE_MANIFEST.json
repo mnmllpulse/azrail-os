@@ -1,6 +1,6 @@
 {
   "version": "1.5.0-rc.1",
-  "variant": "staging-2026-10-08",
+  "variant": "staging-2026-10-09",
   "algorithm": "SHA-256",
   "excludes_self": true,
   "excluded_manifests": [
@@ -95,8 +95,8 @@
     },
     {
       "path": "VERIFICATION.json",
-      "bytes": 1288,
-      "sha256": "ec9abb9353addd547d506e007036edd8dfb6249127a23b6d035405e615b77ab1"
+      "bytes": 1943,
+      "sha256": "3aae3dd3791b4872fdc1e3a871813f684a6e3f3704fab01caf8df3cbaeebe10d"
     },
     {
       "path": "deploy/free.json",
@@ -160,8 +160,8 @@
     },
     {
       "path": "docs/STAGING_STATUS_RU.md",
-      "bytes": 8090,
-      "sha256": "535822b7027402971641e0156f9cd229039889e243742cf6b762355f81aaa2f0"
+      "bytes": 13635,
+      "sha256": "0de4c42d654c50e2c79d62b3de2ec3f29a7a7442fc05592e646196178a8f2279"
     },
     {
       "path": "docs/TASK_1.3_RU.md",
@@ -180,8 +180,8 @@
     },
     {
       "path": "docs/WORKBENCH_RELEASE_RU.md",
-      "bytes": 17259,
-      "sha256": "d2ce2039fc10047c0838d9e5c656647218bf458c0ed56ceffcafbb5a131b7911"
+      "bytes": 17641,
+      "sha256": "2841e98b758e6f98c9664a4491c25a87e4d136fa8b8b9667257d497fbe089903"
     },
     {
       "path": "docs/audit-2026-09-25/AUDIT_RU.md",
@@ -332,6 +332,21 @@
       "path": "docs/verification-workbench/check.txt",
       "bytes": 701,
       "sha256": "e2d44fb77715009d85432283ade3b3027c44585b7d5c20dd6ab9760a789ee96d"
+    },
+    {
+      "path": "docs/verification-workbench/followup-build.txt",
+      "bytes": 2615,
+      "sha256": "21585d10a9440ab120c9a6cdbd9addf6e35cc314b76fa7c5259fda64ab881d92"
+    },
+    {
+      "path": "docs/verification-workbench/followup-check.txt",
+      "bytes": 701,
+      "sha256": "bce9adb69e4bd23b21b95400f552a10e260bcabf3f92faf27dbedc4896c7c65a"
+    },
+    {
+      "path": "docs/verification-workbench/followup-http.json",
+      "bytes": 2659,
+      "sha256": "78858987b71ef34dcab536ef10dcd2ecdf755d9f79d43bfbd6b5b540f76882d7"
     },
     {
       "path": "docs/verification-workbench/migrations.txt",
@@ -560,8 +575,8 @@
     },
     {
       "path": "index.html",
-      "bytes": 168079,
-      "sha256": "0540cb9ff8ba06cd4ce70e033e1241c73ab0f010a6dd594982af7a452320c456"
+      "bytes": 182856,
+      "sha256": "060c2f176d0d7eacfaf532851a7205aed9f32ded248b5545a71168117ac5c035"
     },
     {
       "path": "migrations/002-mission-async.sql",
@@ -2585,13 +2600,13 @@
     },
     {
       "path": "site/assets/app.css",
-      "bytes": 15237,
-      "sha256": "1f9738f24d77911ec96a1427a42868a2213138990fd5daf0e4447b44fdc2721a"
+      "bytes": 15450,
+      "sha256": "5b34657e6a306e9d5d8ff7c7a6168504d30132f135cf27856f51960d50606a45"
     },
     {
       "path": "site/assets/app.js",
-      "bytes": 109073,
-      "sha256": "e90a0a373a670a4eeccdcf38219b1ab5df90d39dad72c3e2f2b6d7160ce67eff"
+      "bytes": 123641,
+      "sha256": "6557faa8e318c77da1f196f20079517727b25cc6ccf20a34f85b72f1307b019a"
     },
     {
       "path": "site/assets/audio-analysis-YUYPYLFX.js",
@@ -2880,8 +2895,8 @@
     },
     {
       "path": "src/lib/mission-concurrency.ts",
-      "bytes": 939,
-      "sha256": "766902b409421bc53b0668cbe6110c694739fb1b5f2587002ecfd5dbc156e7f8"
+      "bytes": 1725,
+      "sha256": "a06ec124d3f0e80de117eeca115f0fe2a3c663ead6c01a326ab040fd55c8f97f"
     },
     {
       "path": "src/lib/mission-limits.ts",
@@ -3330,8 +3345,8 @@
     },
     {
       "path": "tests/mission-concurrency.test.ts",
-      "bytes": 703,
-      "sha256": "6d18cb3047a63cca81b0cbe68b3d9fa81267bc88e47eb525a379c27210449e9e"
+      "bytes": 3360,
+      "sha256": "d31948981a9eab40be0ee074acd3efea3bc0709aea1fb2420b2c80cc92a5c9aa"
     },
     {
       "path": "tests/mission-limits.test.ts",
@@ -3392,6 +3407,11 @@
       "path": "tests/project-plugins.test.ts",
       "bytes": 12294,
       "sha256": "bc6f9e7ea0ec37735582fcd45d80d030e4ade4b8410952e51277b522c0604898"
+    },
+    {
+      "path": "tests/readiness-ui.test.ts",
+      "bytes": 7760,
+      "sha256": "69015b5f1b4dcbb90c0c0ebb1e31540034f35c54201c27fffe4dd6635547dc24"
     },
     {
       "path": "tests/reasoning-leak.test.ts",
@@ -3555,8 +3575,8 @@
     },
     {
       "path": "tests/workbench-ui.test.ts",
-      "bytes": 10473,
-      "sha256": "7a72d0050dbad24f4067c433786cc860dd6e45f0036e265f9f71afd99e8b3def"
+      "bytes": 13370,
+      "sha256": "ac2c8433d2b88ea63a199c10e515deaf02383740394cd0e322140bc9cf6d6b09"
     },
     {
       "path": "tests/workbench.test.ts",
@@ -3580,8 +3600,8 @@
     },
     {
       "path": "ui/app.css",
-      "bytes": 16850,
-      "sha256": "70b430f93d9ef774b869b88eeaa812fe783d913055759c4080ff4cd1143f025f"
+      "bytes": 17087,
+      "sha256": "6d02c304e2f07702c4160d7715bec8a585055cd973687f7d91728c3b7ecd6642"
     },
     {
       "path": "ui/app.html",
@@ -3590,8 +3610,8 @@
     },
     {
       "path": "ui/app.ts",
-      "bytes": 36466,
-      "sha256": "d28a4d122e58d7aca57045e63e34af66a7d99d7450898dbeca214280a38fbcca"
+      "bytes": 38953,
+      "sha256": "a9bb63ea94036c0d1c726db9f47ab9abac81c37f82210093ef30dc04329584c3"
     },
     {
       "path": "ui/audio-analysis.ts",
@@ -3642,6 +3662,11 @@
       "path": "ui/project-tools.ts",
       "bytes": 8180,
       "sha256": "b69010f1cebcb4ef5ad8410ff32bebe9faf9848f14df14a43c98909f56d49d07"
+    },
+    {
+      "path": "ui/readiness.ts",
+      "bytes": 9712,
+      "sha256": "53b53003b36de557335a75b7fb791398e9322fd2dccec7ef936a7f962b31a3a5"
     },
     {
       "path": "ui/studio-draft.ts",
