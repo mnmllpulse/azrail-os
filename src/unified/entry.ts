@@ -7,6 +7,11 @@ import { claimMission, finishAdmission } from '../lib/mission-admission';
 import { readBoundedBody, BodyLimitError } from '../lib/request-body';
 import { BudgetError } from './ledger';
 import {connectorRoute} from './connectors';
+import {pluginRoute} from './plugins';
+import {modelSettingsRoute} from './model-settings';
+import {workbenchRoute} from './workbench';
+import {workbenchPreviewProxy,cleanupWorkbenchPreviews} from './workbench-runtime';
+import {cleanupArtifactStorage} from './artifacts';
 
 export function secureResponse(response:Response,request:Request) {
  const h=new Headers(response.headers);
@@ -22,6 +27,8 @@ export default {
  async fetch(request:Request,env:Env,ctx:ExecutionContext):Promise<Response> {
   const url=new URL(request.url);
   try {
+   const preview=await workbenchPreviewProxy(request,env);
+   if(preview)return preview;
    let response:Response|null=null;
    if(!['GET','HEAD','OPTIONS'].includes(request.method) && request.headers.has('Cookie') && request.headers.get('Origin')!==url.origin)
     response=Response.json({error:'Cross-origin request blocked'},{status:403});
@@ -54,6 +61,9 @@ export default {
     }
    }
    if(!response)response=await connectorRoute(request,env);
+   if(!response)response=await pluginRoute(request,env);
+   if(!response)response=await modelSettingsRoute(request,env);
+   if(!response)response=await workbenchRoute(request,env);
    if(!response)response=await studioRoute(request,env);
    if(!response&&(url.pathname.startsWith('/api/')||url.pathname==='/health'))response=await engine.fetch(request,env,ctx);
    if(!response) {
@@ -72,5 +82,9 @@ export default {
    return secureResponse(Response.json({error:known?(error as Error).message:'Сервис недоступен. Проверьте настройки, лимит и журнал сервера.'},{status:status>=400&&status<=599?status:503}),request);
   }
  },
- scheduled:engine.scheduled,
+ async scheduled(event:ScheduledController,env:Env,ctx:ExecutionContext) {
+  await engine.scheduled(event,env,ctx);
+  ctx.waitUntil(cleanupArtifactStorage(env));
+  ctx.waitUntil(cleanupWorkbenchPreviews(env));
+ },
 } satisfies ExportedHandler<Env>;

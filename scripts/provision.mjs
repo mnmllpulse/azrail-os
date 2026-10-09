@@ -18,6 +18,6 @@ try{await api(`/r2/buckets/${bucket}`);}catch(e){if(!String(e).includes(': 404')
 config.name=name;config.account_id=account;config.routes=domains.map(pattern=>({pattern,custom_domain:true}));
 config.d1_databases[0].database_id=db.uuid;config.d1_databases[0].database_name=`${name}-db`;config.kv_namespaces[0].id=kv.id;config.r2_buckets[0].bucket_name=bucket;
 config.vars.PUBLIC_ORIGINS=domains.map(d=>`https://${d}`).join(',');
-for(const key of ['OIDC_ISSUER','OIDC_CLIENT_ID','OPERATOR_ACCOUNT_IDS','AI_GATEWAY_ID','DAILY_PROVIDER_CALLS','MCP_SERVERS'])if(process.env[key])config.vars[key]=process.env[key];
+for(const key of ['OIDC_ISSUER','OIDC_CLIENT_ID','OPERATOR_ACCOUNT_IDS','AI_GATEWAY_ID','DAILY_PROVIDER_CALLS','MCP_SERVERS','SANDBOX_PREVIEW_HOSTNAME','STUDIO_STORAGE_MAX_BYTES','STUDIO_STORAGE_MAX_FILES'])if(process.env[key])config.vars[key]=process.env[key];
 await writeFile('wrangler.generated.json',JSON.stringify(config,null,2));
 await mkdir('.work',{recursive:true});console.log(`Resources ready. Config: wrangler.generated.json. Profile: ${profile}. No Worker deployed.`);

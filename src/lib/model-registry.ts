@@ -3,7 +3,7 @@
 // ═══════════════════════════════════════════════════════════════════════
 // ГЛАВНОЕ ПРАВИЛО ЭТОГО ФАЙЛА
 //
-// Сюда попадает только то, что подтверждено в каталоге Cloudflare. У
+// Сюда попадает только то, что подтверждено в документации провайдера. У
 // каждой записи есть поле `source` — откуда взяты данные. Поле, которое
 // проверить не удалось, ОТСУТСТВУЕТ, а не заполняется правдоподобным
 // значением.
@@ -39,7 +39,16 @@ export type ModelCapability =
  */
 export type ModelTier = "frontier" | "balanced" | "fast";
 
+export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface ModelEntry {
+  /** Direct OpenAI models are never sent to the Workers AI binding. */
+  transport?: "openai-responses";
+  displayName?: string;
+  reasoningEfforts?: ReasoningEffort[];
+  maxOutputTokens?: number;
+  /** Reviewed Standard tariff; not an authorization to spend. */
+  referencePrice?: { inputUsdPerMillion: number; outputUsdPerMillion: number };
   /** Слаг ровно как в каталоге. Единственное место в проекте, где он живёт. */
   slug: string;
   provider: string;
@@ -81,6 +90,22 @@ export function providerIcon(provider: string): string | undefined {
 }
 
 export const MODEL_REGISTRY: ModelEntry[] = [
+  // OpenAI public model catalog reviewed 2026-10-03. Direct Responses API;
+  // availability additionally requires secret, paid policy and fresh D1 tariff.
+  ...([
+    { slug: "gpt-6-astra", displayName: "GPT-6 Astra", tier: "frontier", input: 10, output: 50, none: false },
+    { slug: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", tier: "balanced", input: 2, output: 10, none: false },
+    { slug: "gpt-6-luna", displayName: "GPT-6 Luna", tier: "fast", input: 0.1, output: 0.5, none: true },
+  ] as const).map((m): ModelEntry => ({
+    slug: m.slug, displayName: m.displayName, provider: "OpenAI", tier: m.tier,
+    capabilities: ["text_generation", "tool_calling", "reasoning", "coding", "vision", "multilingual"],
+    contextWindow: 1_050_000, maxOutputTokens: 128_000,
+    reasoningEfforts: [...(m.none ? ["none" as const] : []), "low", "medium", "high", "xhigh", "max"],
+    requiresGateway: false, transport: "openai-responses",
+    referencePrice: { inputUsdPerMillion: m.input, outputUsdPerMillion: m.output },
+    source: `https://developers.openai.com/api/docs/models/${m.slug} — model catalog reviewed 2026-10-03; Standard prices. Adapter caps input below long-context price threshold.`,
+  })),
+
   // ─── Собственные модели Cloudflare (@cf/) ───────────────────────────
   {
     slug: "@cf/moonshotai/kimi-k2.7-code",

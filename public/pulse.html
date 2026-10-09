@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#09080f">
+<title>DARK MNMLL PULSE OS — Intelligence That Moves the Planet</title>
+<style>
+:root{color-scheme:dark;--bg:#09080f;--panel:rgba(19,16,29,.78);--line:#292333;--text:#f5f2fb;--muted:#aaa1b8;--accent:#b497f4;font:15px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text)}button,textarea,a{font:inherit}button{color:inherit}
+.globe{position:fixed;inset:0;border:0;width:100%;height:100%;z-index:0;opacity:.88}
+.scrim{position:fixed;inset:0;z-index:1;pointer-events:none;background:linear-gradient(90deg,rgba(9,8,15,.98) 0 16%,rgba(9,8,15,.62) 34%,rgba(9,8,15,.18) 62%,rgba(9,8,15,.58) 100%)}
+.rail{position:fixed;z-index:3;inset:0 auto 0 0;width:210px;border-right:1px solid var(--line);background:rgba(9,8,15,.88);backdrop-filter:blur(20px);padding:30px 20px;display:flex;flex-direction:column}
+.brand{font-weight:700;letter-spacing:.2em}.brand small{display:block;margin-top:5px;font-size:9px;color:var(--muted);letter-spacing:.13em;font-weight:500}
+nav{margin-top:58px;display:grid;gap:7px}nav a,nav button{color:var(--muted);text-decoration:none;padding:11px 13px;border-radius:10px;border:0;background:transparent;text-align:left;cursor:pointer}nav a.active,nav button.active{background:#20182f;color:#e7ddf8}.bottom{margin-top:auto;color:var(--muted);font-size:11px;display:grid;gap:10px}
+main{position:relative;z-index:2;margin-left:210px;min-height:100vh;display:grid;place-items:center;padding:40px}
+.hero{width:min(820px,100%);text-align:center;margin-top:4vh}
+.eyebrow{font-size:10px;letter-spacing:.24em;color:var(--muted);text-transform:uppercase}
+h1{font-size:clamp(42px,6vw,76px);font-weight:470;letter-spacing:-.045em;line-height:1.02;margin:22px 0 14px}h1 span{color:#c3adeb}
+.lead{color:var(--muted);max-width:620px;margin:0 auto 28px}
+.composer{background:linear-gradient(130deg,rgba(24,19,32,.93),rgba(16,14,23,.88));border:1px solid rgba(180,151,244,.28);border-radius:20px;padding:18px;box-shadow:0 20px 80px rgba(0,0,0,.28);backdrop-filter:blur(18px);text-align:left}
+textarea{width:100%;min-height:96px;max-height:250px;resize:vertical;border:0;outline:0;background:transparent;color:var(--text);font-size:17px;line-height:1.6}
+textarea::placeholder{color:#9c91aa}.compose-row{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:10px}.modes{display:flex;gap:7px;flex-wrap:wrap}.mode{font-size:10px;color:var(--muted);border:1px solid var(--line);background:rgba(9,8,15,.42);border-radius:999px;padding:7px 10px;cursor:pointer}.mode.active{color:#160c28;background:var(--accent);border-color:var(--accent)}.create{border:0;border-radius:12px;background:var(--accent);color:#170d29;font-weight:700;min-height:44px;padding:0 18px;cursor:pointer}
+.progress{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:18px}.step{font-size:10px;color:#82798f;border-top:1px solid #30283b;padding-top:9px}.step.active{color:#d9c8fa;border-color:#8e70ca}.step.done{color:#c9b5ee;border-color:#604a84}
+.meta{display:flex;justify-content:center;gap:18px;margin-top:22px;color:var(--muted);font-size:10px;letter-spacing:.08em}
+@media(max-width:760px){.rail{position:fixed;inset:0 0 auto 0;width:auto;height:68px;padding:14px 16px;flex-direction:row;align-items:center}.brand small,.bottom{display:none}nav{margin:0 0 0 auto;display:flex}nav a,nav button{padding:8px}.scrim{background:linear-gradient(rgba(9,8,15,.45),rgba(9,8,15,.78))}main{margin-left:0;padding:100px 18px 26px}.hero{margin-top:0}.lead{font-size:14px}.progress{grid-template-columns:1fr}.step:not(:first-child){display:none}.modes{display:none}}
+.access{position:fixed;z-index:8;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.68);backdrop-filter:blur(12px)}.access[hidden]{display:none}.access-card{width:min(460px,calc(100% - 30px));padding:24px;border:1px solid #3d314e;border-radius:20px;background:#13101d;box-shadow:0 25px 90px #0008}.access-card h2{margin:0 0 8px;font-size:22px}.access-card p{color:var(--muted);font-size:13px}.access-card input{width:100%;margin-top:12px;padding:12px;border-radius:10px;border:1px solid #3d314e;background:#0d0a13;color:var(--text)}.access-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}.ghost{background:transparent;border:1px solid var(--line);border-radius:10px;padding:10px 14px}.mission{margin-top:18px;padding:16px 18px;border:1px solid rgba(180,151,244,.18);border-radius:16px;background:rgba(13,10,19,.58);backdrop-filter:blur(14px);text-align:left}.mission[hidden]{display:none}.mission-head{display:flex;justify-content:space-between;gap:16px;align-items:center}.mission strong{font-size:13px}.mission-state{font-size:10px;letter-spacing:.13em;color:var(--accent)}.mission ol{margin:13px 0 0;padding-left:20px;color:var(--muted);font-size:12px}.result{white-space:pre-wrap;margin-top:12px;font-size:13px;color:#d9d0e5}.notice{min-height:20px;margin-top:13px;color:#bcb0ca;font-size:11px}button:disabled{opacity:.45;cursor:not-allowed}
+.workspace-overlay{position:fixed;z-index:9;inset:0;background:rgba(0,0,0,.66);backdrop-filter:blur(14px);display:grid;place-items:center;padding:24px}.workspace-overlay[hidden]{display:none}.workspace-panel{width:min(1120px,100%);height:min(760px,calc(100vh - 48px));border:1px solid #392f48;border-radius:24px;background:rgba(15,12,22,.97);box-shadow:0 30px 120px #000a;overflow:hidden;display:grid;grid-template-rows:auto 1fr}.workspace-head{display:flex;align-items:center;justify-content:space-between;padding:20px 22px;border-bottom:1px solid var(--line)}.workspace-head h2{margin:0;font-size:16px;letter-spacing:.16em}.workspace-body{display:grid;grid-template-columns:260px 1fr;min-height:0}.project-list{border-right:1px solid var(--line);padding:14px;overflow:auto}.project-item{width:100%;display:block;border:1px solid transparent;background:transparent;color:var(--muted);padding:12px;border-radius:12px;text-align:left;cursor:pointer}.project-item.active{background:#21192f;border-color:#3b2d50;color:var(--text)}.project-item b{display:block;font-size:12px}.project-item span{display:block;font-size:9px;margin-top:4px;color:#81768e}.workspace-detail{padding:22px;overflow:auto}.workspace-detail h3{margin:0 0 6px;font-size:24px}.workspace-detail>p{margin:0;color:var(--muted);font-size:12px}.workspace-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:20px 0}.workspace-stat{border:1px solid var(--line);background:#100d17;border-radius:14px;padding:13px}.workspace-stat b{display:block;font-size:20px}.workspace-stat span{font-size:9px;letter-spacing:.12em;color:var(--muted)}.workspace-sections{display:grid;grid-template-columns:1fr 1fr;gap:14px}.workspace-section{border:1px solid var(--line);border-radius:16px;background:#0d0a13;min-height:190px;padding:14px}.workspace-section h4{margin:0 0 11px;font-size:10px;letter-spacing:.15em;color:#c6b1ec}.workspace-row{padding:9px 0;border-top:1px solid #211b29}.workspace-row:first-of-type{border-top:0}.workspace-row b{display:block;font-size:11px;font-weight:600}.workspace-row span{display:block;margin-top:3px;font-size:9px;color:var(--muted);overflow-wrap:anywhere}.workspace-empty{font-size:11px;color:#726979;padding:10px 0}
+@media(max-width:760px){.workspace-overlay{padding:10px}.workspace-panel{height:calc(100vh - 20px)}.workspace-body{grid-template-columns:1fr}.project-list{border-right:0;border-bottom:1px solid var(--line);display:flex;overflow:auto;max-height:105px}.project-item{min-width:180px}.workspace-detail{padding:16px}.workspace-stats{grid-template-columns:1fr 1fr}.workspace-sections{grid-template-columns:1fr}}
+.catalog-overlay{position:fixed;z-index:9;inset:0;background:rgba(0,0,0,.66);backdrop-filter:blur(14px);display:grid;place-items:center;padding:24px}.catalog-overlay[hidden]{display:none}.catalog-panel{width:min(1080px,100%);max-height:calc(100vh - 48px);overflow:auto;border:1px solid #392f48;border-radius:24px;background:rgba(15,12,22,.97);box-shadow:0 30px 120px #000a}.catalog-head{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;padding:20px 22px;border-bottom:1px solid var(--line);background:rgba(15,12,22,.97)}.catalog-head h2{margin:0;font-size:16px;letter-spacing:.16em}.catalog-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding:20px}.catalog-card{border:1px solid var(--line);border-radius:16px;background:#0d0a13;padding:16px;text-align:left}.catalog-card .catalog-index{font-size:9px;letter-spacing:.14em;color:var(--accent)}.catalog-card h3{margin:8px 0 5px;font-size:18px}.catalog-card p{margin:0 0 12px;color:var(--muted);font-size:12px}.catalog-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.catalog-chip{font-size:9px;padding:5px 8px;border:1px solid #30283b;border-radius:999px;color:#b8acc6}.catalog-modules{margin:0 0 14px;padding-left:18px;color:#8f849c;font-size:10px;max-height:86px;overflow:auto}.catalog-run{border:1px solid #49365f;background:#1c1427;border-radius:10px;padding:9px 12px;cursor:pointer;color:#dbc9fa}.catalog-run:hover{border-color:#7657a2}.catalog-note{padding:0 20px 20px;color:#81768e;font-size:10px}@media(max-width:760px){.catalog-overlay{padding:10px}.catalog-grid{grid-template-columns:1fr;padding:12px}.catalog-panel{max-height:calc(100vh - 20px)}}
+
+.bottom a,.bottom button{color:var(--muted);text-decoration:none;border:0;background:transparent;padding:0;text-align:left;cursor:pointer}.bottom button:hover,.bottom a:hover{color:var(--text)}
+.system-panel{width:min(860px,100%);height:auto;max-height:calc(100vh - 48px)}.system-body{padding:22px;overflow:auto}.system-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.system-card{border:1px solid var(--line);border-radius:14px;background:#100d17;padding:14px}.system-card b{display:block;font-size:20px}.system-card span{display:block;margin-top:4px;font-size:9px;letter-spacing:.12em;color:var(--muted)}.system-sections{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}.system-section{border:1px solid var(--line);border-radius:15px;background:#0d0a13;padding:15px}.system-section h3{margin:0 0 12px;font-size:10px;letter-spacing:.14em;color:#c6b1ec}.system-line{display:flex;justify-content:space-between;gap:20px;padding:8px 0;border-top:1px solid #211b29;font-size:11px}.system-line:first-of-type{border-top:0}.system-line span{color:var(--muted)}.system-line b{font-weight:600;text-align:right}.system-note{margin:14px 0 0;color:#81768e;font-size:10px;line-height:1.55}@media(max-width:760px){.system-grid{grid-template-columns:1fr 1fr}.system-sections{grid-template-columns:1fr}.system-panel{max-height:calc(100vh - 20px)}}
+</style>
+</head>
+<body>
+<iframe class="globe" id="pulseGlobe" data-src="/pulse-globe.html" title="Pulse Global Intelligence Network" aria-hidden="true"></iframe>
+<div class="scrim"></div>
+<aside class="rail">
+  <div class="brand">AZRAIL <small>DARK MNMLL PULSE OS</small></div>
+  <nav>
+    <a class="active" href="/pulse.html">CREATE</a>
+    <button id="studiosOpen" type="button">STUDIO</button>
+    <button id="projectsOpen" type="button">PROJECTS</button>
+    <button id="labsOpen" type="button">LABS</button>
+  </nav>
+  <div class="bottom"><span>GLOBAL INTELLIGENCE CORE</span><a href="/system.html">SYSTEM</a><a href="/ultimate.html">ADVANCED ↗</a></div>
+</aside>
+<main>
+  <section class="hero">
+    <div class="eyebrow">Intelligence That Moves the Planet</div>
+    <h1>Что <span>создать?</span></h1>
+    <p class="lead">Опиши результат. AZRAIL сам выберет агентов, модели, инструменты, проверку и путь выполнения.</p>
+    <form class="composer" id="composer">
+      <textarea id="idea" placeholder="Например: проанализируй репозиторий, исправь ошибки, проверь тесты и подготовь deploy…" aria-label="Опиши задачу"></textarea>
+      <div class="compose-row">
+        <div class="modes" id="modes"><button class="mode active" type="button" data-mode="auto">AUTO</button><button class="mode" type="button" data-mode="fast">FAST</button><button class="mode" type="button" data-mode="balanced">BALANCED</button><button class="mode" type="button" data-mode="deep">DEEP</button><button class="mode" type="button" data-mode="creative">CREATIVE</button><button class="mode" type="button" data-mode="code">CODE</button></div>
+        <button class="create" id="createButton" type="submit">CREATE →</button>
+      </div>
+    </form>
+    <div class="progress" id="progress"><div class="step active" data-stage="0">UNDERSTAND</div><div class="step" data-stage="1">ARCHITECTURE</div><div class="step" data-stage="2">EXECUTE</div><div class="step" data-stage="3">VERIFY</div><div class="step" data-stage="4">RESULT</div></div>
+    <div class="meta"><span>ONE ORCHESTRATOR</span><span>AUTO ROUTING</span><span>VERIFIED OUTPUT</span></div>
+    <section class="mission" id="mission" hidden><div class="mission-head"><strong id="missionTitle">Миссия</strong><span class="mission-state" id="missionState">QUEUED</span></div><ol id="missionSteps"></ol><div class="result" id="missionResult"></div></section>
+    <div class="notice" id="notice"></div>
+  </section>
+</main>
+<div class="catalog-overlay" id="studioCatalog" hidden>
+  <section class="catalog-panel" aria-labelledby="studioCatalogTitle">
+    <header class="catalog-head"><h2 id="studioCatalogTitle">STUDIO</h2><button class="ghost" id="studioCatalogClose" type="button">Закрыть</button></header>
+    <div class="catalog-grid" id="studioCatalogGrid"></div>
+    <p class="catalog-note">Верхний уровень упрощён. Legacy-модули сохранены внутри направлений и доступны через ADVANCED.</p>
+  </section>
+</div>
+<div class="workspace-overlay" id="projectsPanel" hidden>
+  <section class="workspace-panel" aria-labelledby="projectsTitle">
+    <header class="workspace-head"><h2 id="projectsTitle">PROJECTS</h2><button class="ghost" id="projectsClose" type="button">Закрыть</button></header>
+    <div class="workspace-body">
+      <aside class="project-list" id="projectList"></aside>
+      <article class="workspace-detail">
+        <h3 id="projectTitle">Проект</h3><p id="projectDescription">Выберите проект.</p>
+        <div class="workspace-stats">
+          <div class="workspace-stat"><b id="filesCount">0</b><span>FILES</span></div>
+          <div class="workspace-stat"><b id="memoryCount">0</b><span>MEMORY</span></div>
+          <div class="workspace-stat"><b id="versionsCount">0</b><span>VERSIONS</span></div>
+          <div class="workspace-stat"><b id="historyCount">0</b><span>HISTORY</span></div>
+        </div>
+        <div class="workspace-sections">
+          <section class="workspace-section"><h4>FILES</h4><div id="projectFiles"></div></section>
+          <section class="workspace-section"><h4>MEMORY</h4><div id="projectMemory"></div></section>
+          <section class="workspace-section"><h4>VERSIONS</h4><div id="projectVersions"></div></section>
+          <section class="workspace-section"><h4>HISTORY</h4><div id="projectHistory"></div></section>
+        </div>
+      </article>
+    </div>
+  </section>
+</div>
+<div class="workspace-overlay" id="systemPanel" hidden>
+  <section class="workspace-panel system-panel" aria-labelledby="systemTitle">
+    <header class="workspace-head"><h2 id="systemTitle">SYSTEM</h2><button class="ghost" id="systemClose" type="button">Закрыть</button></header>
+    <div class="system-body">
+      <div class="system-grid">
+        <div class="system-card"><b id="systemMissions">—</b><span>MISSIONS</span></div>
+        <div class="system-card"><b id="systemCalls">—</b><span>MODEL CALLS</span></div>
+        <div class="system-card"><b id="systemInputTokens">—</b><span>INPUT TOKENS</span></div>
+        <div class="system-card"><b id="systemOutputTokens">—</b><span>OUTPUT TOKENS</span></div>
+      </div>
+      <div class="system-sections">
+        <section class="system-section">
+          <h3>ROUTING</h3>
+          <div class="system-line"><span>Workers plan</span><b id="systemWorkersPlan">—</b></div>
+          <div class="system-line"><span>AI Gateway</span><b id="systemGateway">—</b></div>
+          <div class="system-line"><span>Third-party models</span><b id="systemThirdParty">—</b></div>
+          <div class="system-line"><span>Force free</span><b id="systemForceFree">—</b></div>
+        </section>
+        <section class="system-section">
+          <h3>COST & OBSERVABILITY</h3>
+          <div class="system-line"><span>Monthly budget</span><b id="systemBudget">—</b></div>
+          <div class="system-line"><span>Committed</span><b id="systemSpend">—</b></div>
+          <div class="system-line"><span>Metering</span><b id="systemMetering">—</b></div>
+          <div class="system-line"><span>Mean model latency</span><b id="systemLatency">—</b></div>
+          <div class="system-line"><span>Unknown cost calls</span><b id="systemUnknownCost">—</b></div>
+        </section>
+      </div>
+      <p class="system-note" id="systemNote">Данные загружаются из реального runtime текущего проекта.</p>
+    </div>
+  </section>
+</div>
+<div class="access" id="access" hidden><div class="access-card"><h2>Подключить AZRAIL</h2><p>Введите ключ доступа. Он сохраняется только в текущей вкладке через sessionStorage.</p><input id="accessKey" type="password" autocomplete="off" placeholder="az_… или bootstrap token"><div class="access-actions"><button class="ghost" id="accessClose" type="button">Позже</button><button class="create" id="accessConnect" type="button">Подключить</button></div><div class="notice" id="accessNotice"></div></div></div>
+<script src="/pulse.js" defer></script>
+</body>
+</html>

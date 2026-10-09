@@ -1,85 +1,46 @@
 {
-  "release": "1.4.0",
-  "date": "2026-10-03",
-  "inputArchive": "AZRAIL_PULSE_Unified_1.3.1.zip",
-  "baseline": {
-    "tests": 1154,
-    "suites": 56,
-    "standaloneBytes": 1025455
-  },
-  "final": {
-    "tests": 1181,
-    "suites": 57,
-    "passed": true,
-    "standaloneBytes": 115127,
-    "node": "24.19.0",
+  "release": "1.5.0-rc.1",
+  "date": "2026-10-04",
+  "inputArchive": "AZRAIL_PULSE_Unified_1.4.0.zip",
+  "inputSha256": "1d4aa9e5a4939d1d29495f40cce8924e478864c9c402a8bd66509fefd5292bf5",
+  "repositoryBaseline": "a47b688939a55c567a32aba57a50c38e3f894021",
+  "branch": "codex/azrail-workbench-staging-20261008",
+  "checks": {
+    "tests": 1284,
+    "suites": 66,
     "typecheck": "passed",
+    "uiBuild": "passed",
     "freeDryRun": "passed",
     "paidDryRun": "passed",
-    "npmAudit": {
-      "production": 0,
-      "all": 0
-    }
+    "browser": "Chromium + local Wrangler/D1/R2; project creation, file write, static preview, plugin settings, model budget settings, snapshot and restore, 390px viewport",
+    "browserConsoleErrors": 0
   },
-  "browser": {
-    "passed": true,
-    "browser": "153.0.8010.0",
-    "results": [
-      "Standalone home loads without globe",
-      "Direct URL and reload: web",
-      "Direct URL and reload: image",
-      "Direct URL and reload: music",
-      "Direct URL and reload: video",
-      "Direct URL and reload: audio",
-      "Direct URL and reload: als",
-      "Direct URL and reload: data",
-      "Direct URL and reload: ledger",
-      "Direct URL and reload: lab",
-      "Back/Forward and local studio draft restoration",
-      "Real WAV/MIDI synthesis and media URL cleanup",
-      "Real CSV upload and rendered report",
-      "Real MediaRecorder WebM export",
-      "No horizontal overflow at 320px",
-      "No horizontal overflow at 390px",
-      "No horizontal overflow at 768px",
-      "No horizontal overflow at 1440px",
-      "No page JavaScript errors"
-    ],
-    "errors": []
-  },
-  "smokeAuth": {
-    "cookie": "mock-response check passed",
-    "token": "mock-response check passed",
-    "production": "not exercised"
-  },
-  "liveNotExercised": [
-    "OIDC provider",
-    "Workers AI provider",
-    "OAuth connections",
-    "Docker runtime",
-    "Cloudflare invoice"
+  "notVerifiedLive": [
+    "production OIDC",
+    "OpenAI API",
+    "external MCP/OAuth",
+    "Cloudflare paid Sandbox",
+    "production deployment"
   ],
-  "studios": [
-    "web",
-    "image",
-    "music",
-    "video",
-    "audio",
-    "als",
-    "data",
-    "ledger",
-    "lab"
-  ],
-  "additionalReferenceStudios": [
-    "code",
-    "sandbox",
-    "agent",
-    "knowledge",
-    "model",
-    "automation",
-    "analytics",
-    "deploy",
-    "security",
-    "marketplace"
-  ]
+  "report": "docs/WORKBENCH_RELEASE_RU.md",
+  "staging": {
+    "date": "2026-10-09",
+    "origin": "https://azrail-pulse-staging.mnmllpulse.workers.dev",
+    "deploymentId": "159daae0edaf4b7abe853760974a5aa9",
+    "tests": 1307,
+    "suites": 68,
+    "typecheck": "passed",
+    "dryRun": "passed",
+    "http": "passed: 14 unauthenticated HTTP checks; all 10 published assets match SHA-256",
+    "liveUserLogin": "confirmed by account/session and user mission; full acceptance pending",
+    "report": "docs/STAGING_STATUS_RU.md",
+    "uiBuild": "passed",
+    "readinessUI": "DOM tests passed, including partial failures, stale requests and serialized budget save/readback",
+    "missionCatalogue": "admission/catalogue/outbox atomic; owner isolation and rollback tests passed; existing staging project repaired without restart"
+  },
+  "github": {
+    "pullRequest": "https://github.com/mnmllpulse/azrail-os/pull/12",
+    "ci": "last observed job blocked before first step by GitHub account billing issue; local tests passed independently",
+    "observedMain": "a8adecfb79c8b8b1350af1b72c9204ef8044d4a1"
+  }
 }

@@ -1,0 +1,30 @@
+[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mProxy environment variables detected. We'll use your proxy for fetch requests.[0m
+
+
+
+ ⛅️ wrangler 4.139.0
+────────────────────
+✨ Read 11 files from the assets directory /workspace/azrail-app/site
+Total Upload: 1810.16 KiB / gzip: 453.60 KiB
+Your Worker has access to the following bindings:
+Binding                                                                         Resource                  
+env.Orchestrator (Orchestrator)                                                 Durable Object            
+env.AZRAIL_KV (4b1b2455cfaf4fc3aa766ea2af5da0e2)                                KV Namespace              
+env.AZRAIL_D1 (azrail-db-staging)                                               D1 Database               
+env.AZRAIL_R2 (azrail-artifacts-staging)                                        R2 Bucket                 
+env.AI                                                                          AI                        
+env.ASSETS                                                                      Assets                    
+env.AUTH_MODE ("oidc")                                                          Environment Variable      
+env.PUBLIC_ORIGINS ("https://azrail-pulse-staging.mnmllpul...")                 Environment Variable      
+env.OIDC_ISSUER ("https://mnmll494.cloudflareaccess.com...")                    Environment Variable      
+env.OIDC_CLIENT_ID ("5d880b1255ef2f3c804b1f6ea9d58fffe53ca...")                 Environment Variable      
+env.AZRAIL_WORKERS_PLAN ("free")                                                Environment Variable      
+env.AZRAIL_FORCE_FREE ("true")                                                  Environment Variable      
+env.AZRAIL_METERING ("enforce")                                                 Environment Variable      
+env.UNIFIED_LEDGER ("true")                                                     Environment Variable      
+env.DAILY_PROVIDER_CALLS ("20")                                                 Environment Variable      
+env.AZRAIL_MISSION_BUDGET_USD ("0.10")                                          Environment Variable      
+env.AZRAIL_WRITE_BUDGET ("1000")                                                Environment Variable      
+env.AI_GATEWAY_ID ("default")                                                   Environment Variable      
+
+--dry-run: exiting now.

@@ -7,6 +7,7 @@ import { parseALSBuffer } from './music';
 import { accountCall } from './ledger';
 import {draftRoute} from './drafts';
 import {designRoute} from './design-contract';
+import {artifactProject,deleteArtifact,linkArtifact,listArtifacts,readArtifact,saveArtifact,storageUsage,MAX_ARTIFACT_BYTES,reserveArtifactStorage,releaseEmptyArtifactReservation} from './artifacts';
 
 const json=Response.json;
 export async function studioRoute(request:Request,env:Env,onProviderDispatch?:()=>void):Promise<Response|null> {
@@ -31,15 +32,25 @@ export async function studioRoute(request:Request,env:Env,onProviderDispatch?:()
   sandbox:!!env.AZRAIL_SANDBOX,auth:'oidc',ledger:true,providerCosts:'See Cloudflare account; request ledger is not a Neuron meter',
  });
  if(path==='/api/studio/artifacts'&&request.method==='GET') {
-  return json({artifacts:(await env.AZRAIL_D1.prepare('SELECT id,name,mime,bytes,created_at FROM studio_artifacts WHERE account_id=? ORDER BY created_at DESC LIMIT 100').bind(account).all()).results});
+  const value=url.searchParams.get('projectId');
+  const project=value===null?undefined:value===''?null:await artifactProject(env,account,value);
+  return json({artifacts:await listArtifacts(env,account,project)});
  }
+ if(path==='/api/studio/storage'&&request.method==='GET')return json(await storageUsage(env,account));
  const match=path.match(/^\/api\/studio\/artifacts\/([a-f0-9-]{36})$/);
  if(match&&request.method==='GET') {
-  const row=await env.AZRAIL_D1.prepare('SELECT r2_key,mime,name FROM studio_artifacts WHERE id=? AND account_id=?').bind(match[1],account).first<{r2_key:string;mime:string;name:string}>();
+  const row=await readArtifact(env,account,match[1]);
   if(!row)return json({error:'Файл не найден'},{status:404});
   const file=await env.AZRAIL_R2.get(row.r2_key);if(!file)return json({error:'Объект отсутствует в R2'},{status:404});
   return new Response(file.body,{headers:{'Content-Type':row.mime,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(row.name)}`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
  }
+ if(match&&request.method==='PATCH') {
+  const body=await readJsonRecord(request,2048);
+  if(!Object.hasOwn(body,'projectId'))throw new AccessError('Укажите projectId или null.',400);
+  const projectId=await artifactProject(env,account,body.projectId);
+  return json(await linkArtifact(env,account,match[1],projectId));
+ }
+ if(match&&request.method==='DELETE')return json(await deleteArtifact(env,account,match[1]));
  if(path==='/api/studio/ledger'&&request.method==='GET') {
   const limits=await env.AZRAIL_D1.prepare("SELECT * FROM resource_budgets WHERE scope=?").bind(`platform:${new Date().toISOString().slice(0,10)}`).all();
   const models=await env.AZRAIL_D1.prepare(`SELECT c.model,c.status,c.actual_micro_usd,c.reserved_micro_usd,c.started_at
@@ -50,15 +61,20 @@ export async function studioRoute(request:Request,env:Env,onProviderDispatch?:()
  if(request.method!=='POST')return json({error:'Маршрут не найден'},{status:404});
  if(path==='/api/studio/als')return json(await parseALSBuffer(await readBoundedBody(request,8*1024*1024)));
  if(path==='/api/studio/artifacts') {
-  const bytes=await readBoundedBody(request,12*1024*1024);
+  const projectId=await artifactProject(env,account,request.headers.get('X-Project-Id'));
+  const bytes=await readBoundedBody(request,MAX_ARTIFACT_BYTES);
   const mime=request.headers.get('Content-Type')?.split(';')[0]??'application/octet-stream';
   let decoded:string;try{decoded=decodeURIComponent(request.headers.get('X-Filename')??'artifact.bin');}catch{throw new AccessError('Некорректная кодировка имени файла.',400);}
   const name=decoded.replace(/[\x00-\x1f/\\]/g,'_').slice(0,160).trim()||'artifact.bin';
-  return json(await saveArtifact(env,account,name,mime,bytes),{status:201});
+  return json(await saveArtifact(env,account,name,mime,bytes,projectId,request.headers.get('Idempotency-Key')),{status:201});
  }
  if(path==='/api/studio/image') {
   const body=await readJsonRecord(request,20000);
   const prompt=typeof body.prompt==='string'?body.prompt.trim():'';if(!prompt||prompt.length>4000)return json({error:'Нужен запрос до 4 000 символов.'},{status:400});
+  const projectId=await artifactProject(env,account,body.projectId);
+  const storage=await reserveArtifactStorage(env,account,MAX_ARTIFACT_BYTES);
+  let saving=false;
+  try {
   const result=await accountCall(env,'@cf/black-forest-labs/flux-1-schnell',()=>{onProviderDispatch?.();return env.AI.run('@cf/black-forest-labs/flux-1-schnell',{prompt,steps:4});}) as {image?:string};
   if(typeof result?.image!=='string'||!result.image)throw new Error('Провайдер не вернул изображение');
   if(result.image.length>16*1024*1024)throw new Error('Ответ провайдера превышает лимит');
@@ -71,7 +87,12 @@ export async function studioRoute(request:Request,env:Env,onProviderDispatch?:()
   const webp=bytes.length>=16&&new TextDecoder().decode(bytes.subarray(0,4))==='RIFF'&&new TextDecoder().decode(bytes.subarray(8,12))==='WEBP';
   if(!jpeg&&!png&&!webp)throw new Error('Провайдер вернул неизвестный формат изображения');
   const extension=jpeg?'jpg':png?'png':'webp',mime=jpeg?'image/jpeg':png?'image/png':'image/webp';
-  return json(await saveArtifact(env,account,`pulse-${crypto.randomUUID()}.${extension}`,mime,bytes),{status:201});
+  saving=true;
+  return json(await saveArtifact(env,account,`pulse-${crypto.randomUUID()}.${extension}`,mime,bytes,projectId,null,storage),{status:201});
+  } catch(error) {
+   if(!saving)await releaseEmptyArtifactReservation(env,storage);
+   throw error;
+  }
  }
  if(path==='/api/studio/voice') {
   const bytes=await readBoundedBody(request,4*1024*1024);
@@ -80,11 +101,4 @@ export async function studioRoute(request:Request,env:Env,onProviderDispatch?:()
   return json(result);
  }
  return json({error:'Маршрут не найден'},{status:404});
-}
-async function saveArtifact(env:Env,account:string,name:string,mime:string,bytes:Uint8Array) {
- const id=crypto.randomUUID(),key=`studio/${account}/${id}`;
- await env.AZRAIL_R2.put(key,bytes,{httpMetadata:{contentType:mime}});
- try { await env.AZRAIL_D1.prepare('INSERT INTO studio_artifacts VALUES(?,?,?,?,?,?,?)').bind(id,account,name,mime,key,bytes.length,Date.now()).run(); }
- catch(e){await env.AZRAIL_R2.delete(key);throw e;}
- return {id,name,mime,bytes:bytes.length,url:`/api/studio/artifacts/${id}`};
 }

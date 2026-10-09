@@ -1,4 +1,4 @@
-> Для объединённой версии **1.4.0** используйте [README.md](README.md), [DEPLOY_RU.md](DEPLOY_RU.md) и [docs/AUDIT_RU.md](docs/AUDIT_RU.md). Ниже сохранена инструкция прежней версии; её команды и статусы не описывают текущую поставку.
+> Для объединённой версии **1.5.0-rc.1** используйте [README.md](README.md), [DEPLOY_RU.md](DEPLOY_RU.md) и [docs/WORKBENCH_RELEASE_RU.md](docs/WORKBENCH_RELEASE_RU.md). Ниже сохранена инструкция прежней версии; её команды и статусы не описывают текущую поставку.
 
 # AZRAIL OS 0.8.1 Ultimate
 

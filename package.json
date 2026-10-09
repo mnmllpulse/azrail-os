@@ -1,6 +1,6 @@
 {
   "name": "azrail-pulse-unified",
-  "version": "1.4.0",
+  "version": "1.5.0-rc.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -20,7 +20,12 @@
     "predeploy": "npm run build:ui",
     "build": "node scripts/build-unified.mjs",
     "provision": "node scripts/provision.mjs",
-    "deploy:ci": "node scripts/deploy-ci.mjs"
+    "deploy:ci": "node scripts/deploy-ci.mjs",
+    "staging:check": "node scripts/check-staging.mjs",
+    "build:staging": "npm run staging:check && npm run build:ui && wrangler deploy --dry-run --config wrangler.staging.toml --outdir .work/staging",
+    "db:migrate:staging:plan": "npm run staging:check && node scripts/migrate.mjs --remote --config wrangler.staging.toml",
+    "db:migrate:staging:apply": "npm run staging:check && node scripts/migrate.mjs --remote --apply --config wrangler.staging.toml",
+    "deploy:staging": "npm run staging:check && npm run build:ui && wrangler deploy --config wrangler.staging.toml"
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",

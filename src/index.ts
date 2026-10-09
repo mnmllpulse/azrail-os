@@ -42,6 +42,11 @@ import { runBench } from "./bench/runner";
 import { listRuns, loadOutcomes, saveRun } from "./bench/store";
 import { runInContainer, detectBackend } from "./core/sandbox";
 import { syncWorkspaceToSandbox } from "./core/workspace-sync";
+import { normalizeAzrailRequest } from "./protocol/facade";
+import { listProjects, getProject, createProject } from "./lib/projects-api";
+import { loadProjectWorkspace } from "./lib/project-workspace";
+import { normalizeProjectModelRequest } from "./unified/model-settings";
+import { selectedProjectSkills } from "./unified/plugin-policy";
 
 export { Orchestrator };
 
@@ -83,6 +88,7 @@ function json(data: unknown, env: Env, status = 200): Response {
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+    request = normalizeAzrailRequest(request);
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: getCors(env) });
     }
@@ -117,7 +123,14 @@ export default {
           error:admission.kind === "conflict" ? "Этот Idempotency-Key уже использован с другим содержимым." : "Запрос уже принят и обрабатывается; повторите позже с тем же ключом.",
           code:admission.kind === "conflict" ? "idempotency_conflict" : "idempotency_pending",
         },env,409);
-        const response = await handleRequest(new Request(request,{body:raw}),env);
+        let response: Response;
+        try { response = await handleRequest(new Request(request,{body:raw}),env); }
+        catch(error) {
+          // Admission validation can reject saved model/plugin settings before
+          // scheduling. Release this definite rejection through finishAdmission.
+          if(error instanceof AccessError)response=json({error:error.message},env,error.status);
+          else throw error;
+        }
         try { await finishAdmission(env,`${auth.caller}:${key}`,admission.claim,response); }
         catch (err) { log("error","admission.finalize_failed",{error:err instanceof Error ? err.message : String(err)}); }
         return response;
@@ -311,7 +324,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         "/api/mission": 0, // считается ниже по maxIterations
       };
       // Bound actual streamed bytes before parsing or cloning, not only Content-Length.
-      if (request.method === "POST" && url.pathname !== "/api/upload") {
+      if (["POST","PUT","PATCH"].includes(request.method) && url.pathname !== "/api/upload") {
         try {
           const bytes = await readBoundedBody(request, MAX_TASK_BODY_BYTES);
           const raw = bytes.length ? new TextDecoder().decode(bytes) : "{}";
@@ -324,6 +337,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         }
       }
       await authorizeRequest(env,principal,request,parsedBody);
+      if(request.method === "POST" && ["/api/mission","/api/chat","/api/task"].includes(url.pathname)) {
+        if(parsedBody.preferredMode !== undefined || parsedBody.preferredStudio !== undefined)
+          return json({error:"Профили preferredMode/preferredStudio заменены настройками модели проекта.",code:"routing_profile_deprecated"},env,400);
+        const projectId=String(parsedBody.projectId ?? "default");
+        Object.assign(parsedBody,await normalizeProjectModelRequest(env,projectId,parsedBody));
+        if(parsedBody.skillIds!==undefined) await selectedProjectSkills(env,projectId,parsedBody.skillIds);
+        request = new Request(request,{body:JSON.stringify(parsedBody)});
+      }
       if (request.method === "POST" && url.pathname in MODEL_ROUTES) {
         let cost = MODEL_ROUTES[url.pathname];
         if (url.pathname === "/api/mission") {
@@ -489,14 +510,29 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return json({ success: true, tools: describeTools(env) }, env);
     }
 
+    // Compatibility reads keep the same ownership boundary as the workbench.
+    if(url.pathname === "/api/projects" && request.method === "GET")
+      return json({projects:await listProjects(env,principal)},env);
+    if(url.pathname === "/api/projects" && request.method === "POST") {
+      try {return json({project:await createProject(env,principal,parsedBody)},env,201);}
+      catch(error){if(error instanceof TypeError)return json({error:error.message},env,400);throw error;}
+    }
+    const projectWorkspaceMatch=/^\/api\/projects\/([^/]+)\/workspace$/.exec(url.pathname);
+    if(projectWorkspaceMatch && request.method === "GET") {
+      const projectId=decodeURIComponent(projectWorkspaceMatch[1]);
+      await requireResource(env, principal, "project", projectId);
+      return json({project:await getProject(env,principal,projectId),...await loadProjectWorkspace(env,projectId)},env);
+    }
+    const legacyProjectMatch=/^\/api\/projects\/([^/]+)$/.exec(url.pathname);
+    if(legacyProjectMatch) {
+      const projectId=decodeURIComponent(legacyProjectMatch[1]);
+      await requireResource(env,principal,"project",projectId);
+      if(request.method === "GET")return json({project:await getProject(env,principal,projectId)},env);
+      if(request.method === "PATCH")return json({error:"Обновите проект через /api/workbench/projects/:id с baseRevision.",code:"revision_required"},env,409);
+    }
+
     if (url.pathname === "/api/chat" && request.method === "POST") {
-      const body = (await request.json()) as {
-        message?: string;
-        projectId?: string;
-        conversationId?: string;
-        parentMessageId?: string;
-        preferredModel?: string;
-      };
+      const body = (await request.json()) as TaskRequest;
       const message = body.message?.trim();
       if (!message) return json({ error: "message обязателен." }, env, 400);
 
@@ -516,6 +552,9 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         message,
         payload: message,
         preferredModel: body.preferredModel,
+        reasoningEffort: body.reasoningEffort,
+        maxCostUsd: body.maxCostUsd,
+        skillIds: body.skillIds,
       });
 
       const assistantId = await addMessage(
@@ -561,6 +600,9 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         projectId?: string;
         maxIterations?: number;
         preferredModel?: string;
+        reasoningEffort?: TaskRequest['reasoningEffort'];
+        maxCostUsd?: number;
+        skillIds?: string[];
         attachments?: AttachmentRef[];
       };
       let goal = typeof body.message === 'string' ? body.message.trim() : '';
@@ -612,7 +654,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       // missions миссию нечем отслеживать и не к чему привязать события.
       // Отказ ДО работы дешевле, чем осиротевший прогон, потративший модели.
       try {
-        if (!await createMission(env, missionId, body.projectId, goal, {maxIterations,preferredModel:body.preferredModel,publicHostname:url.hostname})) {
+        if (!await createMission(env, missionId, body.projectId, goal, {maxIterations,preferredModel:body.preferredModel,reasoningEffort:body.reasoningEffort,maxCostUsd:body.maxCostUsd,skillIds:body.skillIds,publicHostname:url.hostname})) {
           return json({error:"В проекте уже выполняется миссия. Дождитесь завершения или отмените её.", code:"project_busy"},env,409);
         }
       } catch (err) {
@@ -654,6 +696,9 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           goal,
           maxIterations,
           preferredModel: body.preferredModel,
+          reasoningEffort: body.reasoningEffort,
+          maxCostUsd: body.maxCostUsd,
+          skillIds: body.skillIds,
           // Хост берётся ИЗ ЗАПРОСА: на своём домене предпросмотр должен
           // вести на него же, а не на workers.dev. Внутри фоновой задачи
           // запроса уже нет — значит, передать надо сейчас.

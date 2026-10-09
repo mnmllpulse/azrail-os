@@ -1,0 +1,101 @@
+{
+  "date": "2026-10-09",
+  "origin": "https://azrail-pulse-staging.mnmllpulse.workers.dev",
+  "deploymentId": "159daae0edaf4b7abe853760974a5aa9",
+  "results": [
+    {
+      "path": "/app.html",
+      "status": 200,
+      "bytes": 7805,
+      "sha256": "5f70fbbdd15d5a2ddde9c0375e969e8b1e941f5a87ce1c2d7473ba37b38b8805",
+      "matchesBuild": true,
+      "cspPresent": true
+    },
+    {
+      "path": "/assets/app.css",
+      "status": 200,
+      "bytes": 15450,
+      "sha256": "5b34657e6a306e9d5d8ff7c7a6168504d30132f135cf27856f51960d50606a45",
+      "matchesBuild": true
+    },
+    {
+      "path": "/assets/app.js",
+      "status": 200,
+      "bytes": 123641,
+      "sha256": "6557faa8e318c77da1f196f20079517727b25cc6ccf20a34f85b72f1307b019a",
+      "matchesBuild": true
+    },
+    {
+      "path": "/assets/audio-analysis-YUYPYLFX.js",
+      "status": 200,
+      "bytes": 7161,
+      "sha256": "de0dc09a1eb5fe7a3c4debc934096008a49c0d0ab8eac46f3e0ef3e599ca3066",
+      "matchesBuild": true
+    },
+    {
+      "path": "/assets/chunk-IXT2MXLT.js",
+      "status": 200,
+      "bytes": 5918,
+      "sha256": "0af40b158a10c0209346d30c03fbf8fde6587b8dc9833b107033e3d718041a78",
+      "matchesBuild": true
+    },
+    {
+      "path": "/assets/connectors-EV7M7K26.js",
+      "status": 200,
+      "bytes": 13450,
+      "sha256": "abeca633be4794775d085080bfab658d04ad74182567a01702f72694c90a065f",
+      "matchesBuild": true
+    },
+    {
+      "path": "/assets/data-UBKLEY2W.js",
+      "status": 200,
+      "bytes": 2500,
+      "sha256": "08e7df1944bc28d1aa3268c7c5c8d675089a2763f1771f230e22443201ca76df",
+      "matchesBuild": true
+    },
+    {
+      "path": "/assets/media-L6VQNGU5.js",
+      "status": 200,
+      "bytes": 148,
+      "sha256": "86bd9e89f1a5105fb511944939a0b40a316c0db11d2bc7d14e801b7afa72b456",
+      "matchesBuild": true
+    },
+    {
+      "path": "/assets/studio-reports-V72HUCLB.js",
+      "status": 200,
+      "bytes": 6410,
+      "sha256": "034a631e15d2b6c8873c2125b4c05b31e830b28c63cecb548b82a7a167eeb2c0",
+      "matchesBuild": true
+    },
+    {
+      "path": "/index.html",
+      "status": 200,
+      "bytes": 7805,
+      "sha256": "5f70fbbdd15d5a2ddde9c0375e969e8b1e941f5a87ce1c2d7473ba37b38b8805",
+      "matchesBuild": true
+    },
+    {
+      "path": "/",
+      "status": 200,
+      "bytes": 7805,
+      "cspPresent": true
+    },
+    {
+      "path": "/auth/status",
+      "status": 200,
+      "bytes": 34,
+      "configured": true,
+      "anonymous": true
+    },
+    {
+      "path": "/api/me",
+      "status": 401,
+      "bytes": 45
+    },
+    {
+      "path": "/api/workbench/projects",
+      "status": 401,
+      "bytes": 45
+    }
+  ]
+}

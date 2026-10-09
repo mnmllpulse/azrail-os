@@ -1701,7 +1701,7 @@ describe("Документы не обещают несуществующего"
   // содержал SHA-256 давно устаревшего архива — по такому документу
   // проверка целостности показала бы, что зип испорчен. И в папке лежал
   // временный файл verify-extract-tmp.mjs, который уехал бы в репозиторий.
-  const idx = ["src/index.ts", "src/unified/studios.ts", "src/unified/connectors.ts"].map(src).join("\n");
+  const idx = ["src/index.ts", "src/unified/studios.ts", "src/unified/connectors.ts", "src/unified/model-settings.ts", "src/unified/plugins.ts"].map(src).join("\n");
   const docs = ["README.md", "DEPLOY.md", "CHANGELOG_v0.4.0.md", "AZRAIL_PRODUCT_SPEC_v0.5.md"];
 
   it("каждый упомянутый /api/* существует в коде", () => {

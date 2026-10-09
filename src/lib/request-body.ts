@@ -54,6 +54,9 @@ function validateTaskFields(body: Record<string,unknown>): void {
   if(body.inputType!==undefined&&!INPUT_TYPES.includes(String(body.inputType)))throw new Error("Неизвестный inputType.");
   if(body.intent!==undefined&&!INTENTS.includes(String(body.intent)))throw new Error("Неизвестный intent.");
   if(body.maxIterations!==undefined&&(!Number.isSafeInteger(body.maxIterations)||Number(body.maxIterations)<1))throw new Error("maxIterations должно быть положительным целым числом.");
+  if(body.skillIds!==undefined&&(!Array.isArray(body.skillIds)||body.skillIds.length>12||body.skillIds.some(id=>typeof id!=="string"||id.length>128)))throw new Error("skillIds: не более 12 идентификаторов навыков.");
+  if(body.reasoningEffort!==undefined&&!["none","low","medium","high","xhigh","max"].includes(String(body.reasoningEffort)))throw new Error("Неизвестный reasoningEffort.");
+  if(body.maxCostUsd!==undefined&&(typeof body.maxCostUsd!=="number"||!Number.isFinite(body.maxCostUsd)||body.maxCostUsd<=0||body.maxCostUsd>100))throw new Error("maxCostUsd: число больше 0 и не больше 100.");
   if(body.conversationHistory!==undefined){
     if(!Array.isArray(body.conversationHistory)||body.conversationHistory.length>50)throw new Error("Некорректная история диалога.");
     for(const item of body.conversationHistory)if(!item||!["user","assistant"].includes(item.role)||typeof item.content!=="string")throw new Error("Некорректная реплика диалога.");

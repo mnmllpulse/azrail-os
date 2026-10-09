@@ -1,3 +1,4 @@
+import { withModelSettings } from "../lib/model-settings-context";
 import { withBillingScope, projectBillingScope } from "../lib/billing-context";
 import { Agent } from "agents";
 import type { Env, AnswerAgentState, TaskRequest, TaskResult } from "../types";
@@ -71,7 +72,7 @@ export class AnswerAgent extends Agent<Env, AnswerAgentState> {
   }
 
   async run(request: TaskRequest): Promise<TaskResult> {
-    return withBillingScope(request._billingScope ?? projectBillingScope(request.projectId), () => this.runScoped(request));
+    return withModelSettings(request, () => withBillingScope(request._billingScope ?? projectBillingScope(request.projectId), () => this.runScoped(request)));
   }
 
   private async runScoped(request: TaskRequest): Promise<TaskResult> {

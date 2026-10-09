@@ -1,11 +1,14 @@
 import {studioById,type StudioId} from './studios';
-export type Route = {page:'create'|'projects'|'studios'|'not-found'} | {page:'studio';studio:StudioId};
+import {type WorkbenchTab,workbenchTabs} from './workbench';
+export type Route = {page:'create'|'projects'|'studios'|'not-found'} | {page:'studio';studio:StudioId} | {page:'workbench';project:string;tab:WorkbenchTab};
 export function routePath(route:Route):string {
- return route.page==='studio'?`/studios/${route.studio}`:route.page==='create'?'/':route.page==='not-found'?'/404':`/${route.page}`;
+ return route.page==='workbench'?`/projects/${encodeURIComponent(route.project)}/${route.tab}`:route.page==='studio'?`/studios/${route.studio}`:route.page==='create'?'/':route.page==='not-found'?'/404':`/${route.page}`;
 }
 export function readRoute(url:URL):Route {
  const offline=!/^https?:$/.test(url.protocol);
  let path=offline?(url.hash.slice(1)||'/'):url.pathname;
+ const project=path.match(/^\/projects\/([^/]+)(?:\/([a-z]+))?\/?$/);
+ if(project){try{const id=decodeURIComponent(project[1]),tab=project[2]??'task';return id&&workbenchTabs.includes(tab as WorkbenchTab)?{page:'workbench',project:id,tab:tab as WorkbenchTab}:{page:'not-found'};}catch{return {page:'not-found'};}}
  const legacy=path.match(/^\/?(?:studio|studios)\/([a-z]+)\/?$/);
  if(legacy){const studio=studioById(legacy[1]);return studio?{page:'studio',studio:studio.id}:{page:'not-found'};}
  path=path.replace(/\/+$/,'')||'/';

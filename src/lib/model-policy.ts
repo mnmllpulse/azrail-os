@@ -2,6 +2,7 @@ import { accountCall } from "../unified/ledger";
 import type { Env } from "../types";
 import { MODEL_REGISTRY, type ModelEntry } from "./model-registry";
 import { meteredCall } from "./billing";
+import { callOpenAIResponses, prepareOpenAIRequest } from "./openai-responses";
 
 // Explicit reviewed subset, NOT every @cf model: some hosted models require Paid.
 // API catalog + Workers AI pricing checked 2026-09-25. Refresh in a reviewed release.
@@ -41,8 +42,8 @@ export async function setModelPolicy(env: Env, enabled: unknown, budget: unknown
   const usd = Number(budget);
   if (!Number.isFinite(usd) || usd < 0 || !Number.isSafeInteger(Math.round(usd * 1e6)))
     throw new ModelPolicyError("Укажите неотрицательный месячный бюджет в USD.");
-  if (enabled && (env.AZRAIL_FORCE_FREE === "true" || !env.AI_GATEWAY_ID || usd <= 0))
-    throw new ModelPolicyError("Для включения нужны AI Gateway, ваш бюджет больше нуля и разрешённый Hybrid-профиль.");
+  if (enabled && (env.AZRAIL_FORCE_FREE === "true" || (!env.AI_GATEWAY_ID && !env.OPENAI_API_KEY?.trim()) || usd <= 0))
+    throw new ModelPolicyError("Для включения нужны настроенный AI Gateway или серверный OpenAI, бюджет больше нуля и разрешённый Hybrid-профиль.");
   // OFF does not erase spend. Re-enabling cannot reset the month's reservations.
   await env.AZRAIL_D1.prepare(`INSERT INTO model_routing_settings(id,allow_third_party,monthly_micro_usd,revision)
     VALUES(1,?,?,1) ON CONFLICT(id) DO UPDATE SET allow_third_party=excluded.allow_third_party,
@@ -51,9 +52,10 @@ export async function setModelPolicy(env: Env, enabled: unknown, budget: unknown
   return readModelPolicy(env);
 }
 
-export function modelBlockReason(model: ModelEntry, policy: ModelPolicy, env: Pick<Env,"AI_GATEWAY_ID"|"AZRAIL_WORKERS_PLAN">): string | null {
+export function modelBlockReason(model: ModelEntry, policy: ModelPolicy, env: Pick<Env,"AI_GATEWAY_ID"|"AZRAIL_WORKERS_PLAN"|"OPENAI_API_KEY">): string | null {
   if (FREE_MODEL_SLUGS.has(model.slug) && !model.requiresGateway) return null;
   if (!policy.allowThirdPartyModels) return "Сторонние и платные модели выключены";
+  if (model.transport === "openai-responses") return env.OPENAI_API_KEY?.trim() ? null : "Серверный ключ OpenAI не настроен";
   if (model.requiresGateway && !env.AI_GATEWAY_ID) return "AI Gateway не настроен";
   if (!model.requiresGateway && env.AZRAIL_WORKERS_PLAN !== "paid") return "Требуется Workers Paid";
   return null;
@@ -61,7 +63,20 @@ export function modelBlockReason(model: ModelEntry, policy: ModelPolicy, env: Pi
 
 export async function eligibleRegistry(env: Env): Promise<ModelEntry[]> {
   const policy = await readModelPolicy(env);
-  return MODEL_REGISTRY.filter(m => !modelBlockReason(m, policy, env));
+  const eligible = MODEL_REGISTRY.filter(m => !modelBlockReason(m, policy, env));
+  const result: ModelEntry[] = [];
+  for (const model of eligible) {
+    if (model.transport !== "openai-responses" || await hasFreshModelPrice(env, model.slug)) result.push(model);
+  }
+  return result;
+}
+
+export async function hasFreshModelPrice(env: Env, slug: string): Promise<boolean> {
+  const price = await env.AZRAIL_D1.prepare("SELECT input_micro_usd_per_million AS i,output_micro_usd_per_million AS o,updated_at FROM model_prices WHERE model=?")
+    .bind(slug).first<{i:number;o:number;updated_at:number}>();
+  const now = Date.now();
+  return !!price && [price.i, price.o].every(n => Number.isSafeInteger(n) && n >= 0) &&
+    Number.isSafeInteger(price.updated_at) && price.updated_at <= now && now - price.updated_at <= 7 * 86400_000;
 }
 
 /** The only text-model provider boundary. Rechecked for EVERY attempt. */
@@ -75,24 +90,28 @@ async function policyModelCallInternal(env: Env, model: ModelEntry, input: Recor
     return meteredCall({...env, AZRAIL_METERING: env.AZRAIL_METERING ? "observe" : undefined},
       model.slug, input, scope, () => env.AI.run(model.slug, input));
   }
-  const price = await env.AZRAIL_D1.prepare("SELECT updated_at FROM model_prices WHERE model=?")
-    .bind(model.slug).first<{updated_at:number}>();
-  if (!price || Date.now() - price.updated_at > 7 * 86400_000)
+  if (!await hasFreshModelPrice(env, model.slug))
     throw new ModelPolicyError("Нет свежего проверенного тарифа. Обновите тариф перед платным вызовом.");
+  // Validate before reserving. Text is bounded below long-context pricing; no built-in paid tools.
+  let openaiBody: Record<string, unknown> | undefined;
+  try { if (model.transport === "openai-responses") openaiBody = prepareOpenAIRequest(model, input); }
+  catch (error) { throw new ModelPolicyError(error instanceof Error ? error.message : "Некорректный запрос OpenAI."); }
+  // Reserve using the full translated payload (including function schemas), not only user text.
+  const billingInput = openaiBody ? { prompt: JSON.stringify(openaiBody), max_tokens: openaiBody.max_output_tokens } : input;
   const budgetScope = `paid-month:${new Date().toISOString().slice(0,7)}`;
   // Read the limit from the current settings inside D1, never from an earlier snapshot.
   await env.AZRAIL_D1.prepare(`INSERT INTO spend_limits(scope,limit_micro_usd)
     SELECT ?,monthly_micro_usd FROM model_routing_settings WHERE id=1
     ON CONFLICT(scope) DO UPDATE SET limit_micro_usd=excluded.limit_micro_usd`)
     .bind(budgetScope).run();
-  return meteredCall({...env, AZRAIL_METERING:"enforce"}, model.slug, input, scope, () =>
-    (model.requiresGateway
+  return meteredCall({...env, AZRAIL_METERING:"enforce"}, model.slug, billingInput, scope, () =>
+    (openaiBody ? callOpenAIResponses(env, openaiBody) : model.requiresGateway
       ? env.AI.run(model.slug, input, {gateway:{id:env.AI_GATEWAY_ID!}})
       : env.AI.run(model.slug, input)).catch(() => {
         throw new ModelPolicyError("Платный вызов имеет неопределённый результат. Резерв сохранён; автоматический повтор отключён.");
       }), budgetScope, {
     policyRevision:policy.revision,
-    additionalBudgetScopes:scope.startsWith("mission:")?[scope]:[],
+    additionalBudgetScopes:/^(mission|task):/.test(scope)?[scope]:[],
     beforeInvoke:async()=>{
       const current=await readModelPolicy(env);
       if(!current.allowThirdPartyModels||current.revision!==policy.revision)
